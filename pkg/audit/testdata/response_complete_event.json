@@ -1,0 +1,75 @@
+{
+  "apiVersion": "audit.k8s.io/v1",
+  "kind": "EventList",
+  "metadata": {},
+  "items": [
+    {
+      "apiVersion": "audit.k8s.io/v1",
+      "kind": "Event",
+      "level": "RequestResponse",
+      "auditID": "audit-123",
+      "stage": "ResponseComplete",
+      "requestURI": "/apis/wardle.example.com/v1alpha1/namespaces/default/flunders?fieldManager=kubectl",
+      "verb": "create",
+      "user": {
+        "username": "alice@example.com",
+        "uid": "uid-alice",
+        "groups": [
+          "devs",
+          "admins"
+        ],
+        "extra": {
+          "example.com/tenant": [
+            "team-a"
+          ]
+        }
+      },
+      "sourceIPs": [
+        "10.0.0.5"
+      ],
+      "userAgent": "kubectl/v1.33.0",
+      "objectRef": {
+        "resource": "flunders",
+        "namespace": "default",
+        "apiGroup": "wardle.example.com",
+        "apiVersion": "v1alpha1",
+        "name": "audit-probe",
+        "uid": "uid-123",
+        "resourceVersion": "7"
+      },
+      "responseStatus": {
+        "apiVersion": "v1",
+        "kind": "Status",
+        "metadata": {},
+        "status": "Success",
+        "code": 201
+      },
+      "requestObject": {
+        "apiVersion": "wardle.example.com/v1alpha1",
+        "kind": "Flunder",
+        "metadata": {
+          "name": "audit-probe",
+          "namespace": "default"
+        },
+        "spec": {
+          "reference": "alpha"
+        }
+      },
+      "responseObject": {
+        "apiVersion": "wardle.example.com/v1alpha1",
+        "kind": "Flunder",
+        "metadata": {
+          "name": "audit-probe",
+          "namespace": "default",
+          "resourceVersion": "7",
+          "uid": "uid-123"
+        },
+        "spec": {
+          "reference": "alpha"
+        }
+      },
+      "requestReceivedTimestamp": "2026-04-20T11:00:00.000000Z",
+      "stageTimestamp": "2026-04-20T11:00:01.000000Z"
+    }
+  ]
+}
