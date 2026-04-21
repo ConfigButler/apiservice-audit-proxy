@@ -62,7 +62,7 @@ jobs:
             helm version
             golangci-lint version
             controller-gen --version
-            setup-envtest --help >/dev/null
+            setup-envtest version
             task --version
           '
 
