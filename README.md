@@ -176,11 +176,10 @@ Important chart assumptions:
 This folder now also carries its own:
 
 - `.github/workflows/ci.yml`
-- `.github/workflows/release.yml`
 - `.devcontainer/`
 
-That keeps the prototype usable as a small standalone project before extraction into its own
-repository.
+The single `ci.yml` workflow now handles both validation and tag-driven releases, which keeps the
+prototype closer to the main project before extraction into its own repository.
 
 ## Tests
 
