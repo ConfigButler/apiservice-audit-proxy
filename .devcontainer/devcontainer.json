@@ -15,12 +15,18 @@
     "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {},
     "ghcr.io/devcontainers/features/git:1": {}
   },
+  "runArgs": [
+    "--group-add=docker",
+    "--add-host=host.docker.internal:host-gateway"
+  ],
   "customizations": {
     "vscode": {
       "extensions": [
         "golang.go",
         "ms-kubernetes-tools.vscode-kubernetes-tools",
-        "ms-azuretools.vscode-docker"
+        "ms-azuretools.vscode-docker",
+        "openai.chatgpt",
+        "anthropic.claude-code"
       ],
       "settings": {
         "go.toolsManagement.checkForUpdates": "local",
@@ -29,12 +35,17 @@
       }
     }
   },
-  "postCreateCommand": "bash .devcontainer/post-create.sh",
+  "postCreateCommand": "bash .devcontainer/post-create.sh '${containerWorkspaceFolder}'",
+  "postStartCommand": "bash .devcontainer/sync-signing-key.sh",
   "remoteUser": "vscode",
   "mounts": [
     "source=gomodcache,target=/go/pkg/mod,type=volume",
     "source=gobuildcache,target=/home/vscode/.cache/go-build,type=volume",
     "source=auditproxycodexconfig,target=/home/vscode/.codex,type=volume",
     "source=auditproxyclaudeconfig,target=/home/vscode/.claude,type=volume"
-  ]
+  ],
+  "containerEnv": {
+    "GIT_USER_NAME": "${localEnv:GIT_USER_NAME}",
+    "GIT_USER_EMAIL": "${localEnv:GIT_USER_EMAIL}"
+  }
 }
