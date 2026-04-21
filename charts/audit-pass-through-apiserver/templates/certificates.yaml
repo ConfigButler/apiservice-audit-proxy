@@ -1,0 +1,33 @@
+{{- if eq (include "audit-pass-through-apiserver.certificateMode" .) "cert-manager" }}
+{{- if .Values.certificates.certManager.createSelfSignedIssuer }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "audit-pass-through-apiserver.servingIssuerName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "audit-pass-through-apiserver.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+{{- end }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "audit-pass-through-apiserver.servingCertificateName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "audit-pass-through-apiserver.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "audit-pass-through-apiserver.servingSecretName" . }}
+  duration: {{ .Values.certificates.certManager.duration }}
+  renewBefore: {{ .Values.certificates.certManager.renewBefore }}
+  privateKey:
+    rotationPolicy: Always
+  issuerRef:
+    name: {{ include "audit-pass-through-apiserver.servingIssuerName" . }}
+    kind: {{ .Values.certificates.certManager.issuerRef.kind }}
+    group: {{ .Values.certificates.certManager.issuerRef.group }}
+  dnsNames:
+    {{- include "audit-pass-through-apiserver.servingDNSNames" . | nindent 4 }}
+{{- end }}

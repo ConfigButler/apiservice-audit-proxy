@@ -1,0 +1,26 @@
+service:
+  port: 443
+
+containerPort: 9445
+
+apiService:
+  enabled: true
+  name: v1alpha1.wardle.example.com
+  group: wardle.example.com
+  version: v1alpha1
+  groupPriorityMinimum: 1000
+  versionPriority: 15
+
+backend:
+  url: https://api-backend.wardle.svc.cluster.local:443
+  insecureSkipVerify: true
+  clientCertSecretName: audit-pass-through-backend-client-cert
+  serverName: api-backend.wardle.svc.cluster.local
+
+webhook:
+  kubeconfigSecretName: audit-pass-through-webhook-kubeconfig
+
+certificates:
+  mode: cert-manager
+  certManager:
+    createSelfSignedIssuer: true

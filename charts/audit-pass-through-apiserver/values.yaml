@@ -35,9 +35,21 @@ securityContext:
 
 service:
   type: ClusterIP
-  port: 9445
+  port: 443
 
 listenAddress: ":9445"
+containerPort: 9445
+
+apiService:
+  enabled: false
+  annotations: {}
+  caBundle: ""
+  group: wardle.example.com
+  groupPriorityMinimum: 1000
+  insecureSkipTLSVerify: false
+  name: v1alpha1.wardle.example.com
+  version: v1alpha1
+  versionPriority: 15
 
 backend:
   url: "https://sample-apiserver.wardle.svc:443"
@@ -54,15 +66,26 @@ webhook:
   kubeconfigKey: kubeconfig
   timeout: 5s
 
+certificates:
+  mode: dev-self-signed
+  existingSecretName: ""
+  devSelfSigned:
+    secretName: ""
+  certManager:
+    certificateName: ""
+    createSelfSignedIssuer: false
+    duration: 2160h
+    issuerRef:
+      group: cert-manager.io
+      kind: Issuer
+      name: ""
+    renewBefore: 360h
+    secretName: ""
+    selfSignedIssuerName: ""
+
 audit:
   maxBodyBytes: 1048576
   captureTempDir: ""
-
-tls:
-  enabled: false
-  secretName: ""
-  certFileName: tls.crt
-  keyFileName: tls.key
 
 resources: {}
 
@@ -74,4 +97,3 @@ extraArgs: []
 env: []
 volumes: []
 volumeMounts: []
-

@@ -102,15 +102,29 @@ Recommended standalone e2e layout:
 - `hack/e2e/`
 - `Taskfile.e2e.yml` or a dedicated `task e2e:*` namespace
 
-Recommended e2e scenarios:
+Recommended first e2e scenario:
 
-- happy-path install through Helm
-- proxy serves behind `APIService`
-- mutating request reaches backend successfully
-- synthetic audit event is emitted to a test webhook receiver
-- delegated user identity is preserved well enough for downstream attribution
-- serving TLS wiring works
-- backend TLS wiring works for the supported trust mode
+- one smoke path centered on `APIService` proxy behavior, not a broad matrix
+
+Concrete first flow:
+
+1. create the k3d cluster and install cert-manager
+2. deploy the real sample-apiserver behind a distinct backend `Service` such as `api-backend`
+3. deploy the audit pass-through proxy as the `APIService` target `Service`
+4. let cert-manager issue the proxy serving certificate and mount that Secret into the proxy pod
+5. let cert-manager inject the serving CA into `APIService.caBundle` so kube-apiserver validates
+   the proxy over HTTPS without `insecureSkipTLSVerify`
+6. let cert-manager issue the proxy's backend client certificate and mount that Secret into the
+   proxy pod so the real sample-apiserver accepts the proxied hop
+7. reuse the existing audit webhook receiver kubeconfig model for the proxy's outbound webhook POST
+8. issue one mutating Wardle request such as `kubectl apply -f flunder.yaml`
+9. assert:
+   - the request succeeds through the aggregated API path
+   - `apiservice/v1alpha1.wardle.example.com` stays `Available`
+   - the real backend receives the request successfully
+   - the webhook receiver gets one synthetic `EventList`
+   - that event contains the recovered fields this project exists to restore:
+     `objectRef.name`, `requestObject`, and `responseObject`
 
 Recommended first CI posture:
 
@@ -132,6 +146,8 @@ Important:
 - keep the first e2e lane narrow and reliable
 - do not try to reproduce every edge case in v1
 - prefer one trustworthy smoke path over a broad but flaky suite
+- base that first smoke path directly on cert-manager-issued certificates so the supported TLS story
+  is exercised from day one
 
 ### 3. Certificate UX For First-Time Users
 
@@ -153,6 +169,14 @@ Recommended product direction:
 - support one simple dev path
 - support one recommended rotating-cert path
 - document the trust model clearly for both
+
+For Step 2 e2e specifically, prefer the rotating-cert path first.
+
+Reason:
+
+- the key integration risk is not "can we mount any cert Secret at all?"
+- the key integration risk is "does `APIService` proxying work when the proxy is fronted by
+  cert-manager-issued serving TLS and real trust injection?"
 
 Recommended supported modes:
 
@@ -176,6 +200,14 @@ Recommendation:
 - allow a clearly labeled dev-only path that uses `APIService.spec.insecureSkipTLSVerify: true`
   where acceptable for local testing
 - provide a task or script that prepares the minimal secrets/config needed for a local cluster
+
+This is still worth shipping, but it should not be the first e2e gate.
+
+Why:
+
+- it is a convenience path
+- it does not prove the recommended cert-manager trust flow
+- it can follow after the cert-manager-backed smoke scenario is stable
 
 Success criteria:
 
@@ -205,6 +237,32 @@ Recommended chart behavior:
 - `existing-secret` stays available for advanced users
 - `cert-manager` mode creates the minimum resources needed for a sane default
 - values and notes explain what Secret names and mounts are expected
+
+For the first e2e lane, keep the cert-manager shape minimal:
+
+- one namespace-scoped `Issuer` for the proxy serving certificate
+- one `Certificate` for the proxy serving Secret mounted into the proxy pod
+- one `APIService` annotation or equivalent wiring so cert-manager injects the serving CA bundle
+- one backend client CA plus one proxy client `Certificate` if the sample-apiserver continues to
+  require client authentication from the immediate caller
+- no extra certificate modes in the first smoke path beyond what is needed to make the proxy work
+
+Minimal manifest split to target in e2e:
+
+- `APIService v1alpha1.wardle.example.com` points at the proxy `Service`
+- the proxy forwards to a distinct backend `Service`
+- the proxy mounts:
+  - the cert-manager-issued serving Secret
+  - the cert-manager-issued backend client cert Secret
+  - the webhook kubeconfig Secret
+- the real sample-apiserver trusts the backend client CA Secret
+
+This keeps the e2e story concrete:
+
+- cert-manager owns certificate issuance
+- kube-apiserver validates the proxy with an injected CA bundle
+- the proxy authenticates to the backend with a mounted client cert
+- the test proves the real `APIService` proxy topology rather than a dev-only shortcut
 
 Recommended docs to include:
 

@@ -1,7 +1,11 @@
 1. Create or provide the webhook kubeconfig Secret referenced by `webhook.kubeconfigSecretName`.
 2. Set `backend.url` to the real aggregated backend this proxy should forward to.
-3. If you enable `tls.enabled`, provide `tls.secretName` with `tls.crt` and `tls.key`.
+3. Choose one serving certificate path with `certificates.mode`:
+   - `existing-secret`: mount an existing TLS Secret with `tls.crt` and `tls.key`
+   - `dev-self-signed`: generate a Helm-managed self-signed cert and use `APIService.insecureSkipTLSVerify`
+   - `cert-manager`: let cert-manager issue the serving cert and inject CA into the `APIService`
 4. If the backend requires custom trust or mTLS, set `backend.caSecretName` and/or `backend.clientCertSecretName`.
+5. If you enable `apiService.enabled` with `certificates.mode=existing-secret`, set either `apiService.caBundle` or `apiService.insecureSkipTLSVerify=true`.
 
 Example:
 
@@ -9,5 +13,5 @@ Example:
     --namespace {{ .Release.Namespace }} \
     --create-namespace \
     --set backend.url=https://sample-apiserver.wardle.svc:443 \
-    --set webhook.kubeconfigSecretName=audit-pass-through-webhook-kubeconfig
-
+    --set webhook.kubeconfigSecretName=audit-pass-through-webhook-kubeconfig \
+    --set certificates.mode=dev-self-signed

@@ -1,0 +1,36 @@
+{{- if .Values.apiService.enabled }}
+{{- $skipVerify := eq (include "audit-pass-through-apiserver.apiServiceSkipVerify" .) "true" -}}
+{{- $mode := include "audit-pass-through-apiserver.certificateMode" . -}}
+{{- if and (eq $mode "existing-secret") (not $skipVerify) (not .Values.apiService.caBundle) -}}
+{{- fail "apiService.caBundle or apiService.insecureSkipTLSVerify=true is required when apiService.enabled=true and certificates.mode=existing-secret" -}}
+{{- end }}
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: {{ required "apiService.name is required when apiService.enabled=true" .Values.apiService.name }}
+  {{- if or (eq $mode "cert-manager") .Values.apiService.annotations }}
+  annotations:
+    {{- if eq $mode "cert-manager" }}
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "audit-pass-through-apiserver.servingCertificateName" . }}
+    {{- end }}
+    {{- with .Values.apiService.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
+  labels:
+    {{- include "audit-pass-through-apiserver.labels" . | nindent 4 }}
+spec:
+  group: {{ required "apiService.group is required when apiService.enabled=true" .Values.apiService.group }}
+  groupPriorityMinimum: {{ .Values.apiService.groupPriorityMinimum }}
+  versionPriority: {{ .Values.apiService.versionPriority }}
+  version: {{ required "apiService.version is required when apiService.enabled=true" .Values.apiService.version }}
+  service:
+    name: {{ include "audit-pass-through-apiserver.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+    port: {{ .Values.service.port }}
+  {{- if $skipVerify }}
+  insecureSkipTLSVerify: true
+  {{- else if .Values.apiService.caBundle }}
+  caBundle: {{ .Values.apiService.caBundle | quote }}
+  {{- end }}
+{{- end }}

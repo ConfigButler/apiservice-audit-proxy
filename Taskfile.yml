@@ -6,6 +6,12 @@ set:
   - nounset
   - pipefail
 
+includes:
+  e2e:
+    taskfile: ./Taskfile.e2e.yml
+    dir: .
+    flatten: true
+
 vars:
   APP_NAME: audit-pass-through-apiserver
   IMAGE_REPOSITORY: '{{.IMAGE_REPOSITORY | default "audit-pass-through-apiserver"}}'

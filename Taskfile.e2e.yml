@@ -1,0 +1,191 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+version: "3"
+
+vars:
+  CTX: '{{.CTX | default "k3d-audit-pass-through-e2e"}}'
+  CLUSTER_NAME:
+    sh: |
+      ctx='{{.CTX}}'
+      ctx="${ctx#k3d-}"
+      ctx="${ctx#kind-}"
+      printf '%s' "${ctx}"
+  DOCKER: '{{.DOCKER | default "docker"}}'
+  FLUX: '{{.FLUX | default "flux"}}'
+  HELM: '{{.HELM | default "helm"}}'
+  K3D: '{{.K3D | default "k3d"}}'
+  KUBECTL: '{{.KUBECTL | default "kubectl"}}'
+  E2E_PROXY_IMAGE: '{{.E2E_PROXY_IMAGE | default "audit-pass-through-apiserver:e2e-local"}}'
+  E2E_PROXY_IMAGE_REPOSITORY:
+    sh: |
+      ref='{{.E2E_PROXY_IMAGE}}'
+      repo="${ref%:*}"
+      tag="${ref##*:}"
+      if [ "${repo}" = "${tag}" ]; then
+        printf '%s' "${ref}"
+      else
+        printf '%s' "${repo}"
+      fi
+  E2E_PROXY_IMAGE_TAG:
+    sh: |
+      ref='{{.E2E_PROXY_IMAGE}}'
+      repo="${ref%:*}"
+      tag="${ref##*:}"
+      if [ "${repo}" = "${tag}" ]; then
+        printf 'latest'
+      else
+        printf '%s' "${tag}"
+      fi
+  E2E_WEBHOOK_IMAGE: '{{.E2E_WEBHOOK_IMAGE | default "audit-pass-through-mock-audit-webhook:e2e-local"}}'
+  E2E_PROXY_NAMESPACE: '{{.E2E_PROXY_NAMESPACE | default "wardle"}}'
+  E2E_WEBHOOK_NAMESPACE: '{{.E2E_WEBHOOK_NAMESPACE | default "audit-pass-through-e2e"}}'
+  E2E_WEBHOOK_SERVICE_NAME: '{{.E2E_WEBHOOK_SERVICE_NAME | default "audit-pass-through-mock-audit-webhook"}}'
+  E2E_RELEASE_NAME: '{{.E2E_RELEASE_NAME | default "audit-pass-through-apiserver"}}'
+  FLUX_NAMESPACE: '{{.FLUX_NAMESPACE | default "flux-system"}}'
+  FLUX_WAIT_TIMEOUT: '{{.FLUX_WAIT_TIMEOUT | default "600s"}}'
+  STAMPS_DIR: .stamps/e2e/{{.CLUSTER_NAME}}
+
+tasks:
+  e2e:doctor:
+    desc: Verify the local machine can run the standalone e2e flow
+    cmds:
+      - bash hack/e2e/check-docker.sh
+      - "{{.K3D}} version"
+      - "{{.FLUX}} --version"
+      - "{{.HELM}} version --short"
+      - "{{.KUBECTL}} version --client=true"
+
+  e2e:cluster-up:
+    desc: Create or reuse the local k3d cluster for this project
+    cmds:
+      - task: e2e:doctor
+      - |
+        export CTX="{{.CTX}}"
+        export CLUSTER_NAME="{{.CLUSTER_NAME}}"
+        export K3D="{{.K3D}}"
+        export KUBECTL="{{.KUBECTL}}"
+        bash test/e2e/cluster/start-cluster.sh
+
+  e2e:flux-bootstrap:
+    desc: Install Flux and the shared add-ons used by the standalone prototype
+    cmds:
+      - task: e2e:cluster-up
+      - "{{.FLUX}} install --context {{.CTX}} --namespace {{.FLUX_NAMESPACE}}"
+      - "{{.KUBECTL}} --context {{.CTX}} apply -k test/e2e/setup/flux"
+      - |
+        export CTX="{{.CTX}}"
+        export FLUX_SERVICES_WAIT_TIMEOUT="{{.FLUX_WAIT_TIMEOUT}}"
+        bash hack/e2e/wait-flux-resources.sh
+
+  e2e:build-image:
+    desc: Build the proxy image used for local e2e
+    cmds:
+      - "{{.DOCKER}} build -t {{.E2E_PROXY_IMAGE}} ."
+
+  e2e:build-mock-webhook-image:
+    desc: Build the mock audit webhook image used for local e2e
+    cmds:
+      - "{{.DOCKER}} build --build-arg BINARY=mock-audit-webhook -t {{.E2E_WEBHOOK_IMAGE}} ."
+
+  e2e:build-images:
+    desc: Build both local e2e images
+    cmds:
+      - task: e2e:build-image
+      - task: e2e:build-mock-webhook-image
+
+  e2e:load-image:
+    desc: Load the proxy image into the k3d cluster
+    cmds:
+      - task: e2e:cluster-up
+      - task: e2e:build-image
+      - mkdir -p {{.STAMPS_DIR}}
+      - |
+        export CLUSTER_NAME="{{.CLUSTER_NAME}}"
+        export IMAGE="{{.E2E_PROXY_IMAGE}}"
+        export K3D="{{.K3D}}"
+        export DOCKER="{{.DOCKER}}"
+        export STAMP_FILE="{{.STAMPS_DIR}}/proxy-image.stamp"
+        bash hack/e2e/load-image.sh
+
+  e2e:load-mock-webhook-image:
+    desc: Load the mock audit webhook image into the k3d cluster
+    cmds:
+      - task: e2e:cluster-up
+      - task: e2e:build-mock-webhook-image
+      - mkdir -p {{.STAMPS_DIR}}
+      - |
+        export CLUSTER_NAME="{{.CLUSTER_NAME}}"
+        export IMAGE="{{.E2E_WEBHOOK_IMAGE}}"
+        export K3D="{{.K3D}}"
+        export DOCKER="{{.DOCKER}}"
+        export STAMP_FILE="{{.STAMPS_DIR}}/mock-webhook-image.stamp"
+        bash hack/e2e/load-image.sh
+
+  e2e:load-images:
+    desc: Load both local e2e images into the cluster
+    cmds:
+      - task: e2e:load-image
+      - task: e2e:load-mock-webhook-image
+
+  e2e:deploy-mock-webhook:
+    desc: Deploy the in-cluster mock audit webhook receiver
+    cmds:
+      - task: e2e:load-mock-webhook-image
+      - "{{.KUBECTL}} --context {{.CTX}} apply -k test/e2e/setup/manifests/mock-audit-webhook"
+      - "{{.KUBECTL}} --context {{.CTX}} -n {{.E2E_WEBHOOK_NAMESPACE}} rollout status deploy/{{.E2E_WEBHOOK_SERVICE_NAME}} --timeout=180s"
+
+  e2e:deploy-backend:
+    desc: Deploy the sample aggregated backend and its backend client cert wiring
+    cmds:
+      - task: e2e:flux-bootstrap
+      - "{{.KUBECTL}} --context {{.CTX}} apply -k test/e2e/setup/manifests/sample-apiserver"
+      - "{{.KUBECTL}} --context {{.CTX}} -n {{.E2E_PROXY_NAMESPACE}} rollout status deploy/wardle-server --timeout=180s"
+
+  e2e:prepare-webhook-kubeconfig:
+    desc: Create the Secret consumed by the proxy for outbound webhook delivery
+    cmds:
+      - task: e2e:deploy-mock-webhook
+      - "{{.KUBECTL}} --context {{.CTX}} create namespace {{.E2E_PROXY_NAMESPACE}} --dry-run=client -o yaml | {{.KUBECTL}} --context {{.CTX}} apply -f -"
+      - |
+        export CTX="{{.CTX}}"
+        export PROXY_NAMESPACE="{{.E2E_PROXY_NAMESPACE}}"
+        export SECRET_NAME="audit-pass-through-webhook-kubeconfig"
+        export WEBHOOK_NAMESPACE="{{.E2E_WEBHOOK_NAMESPACE}}"
+        export WEBHOOK_SERVICE_NAME="{{.E2E_WEBHOOK_SERVICE_NAME}}"
+        bash hack/e2e/write-webhook-kubeconfig.sh
+
+  e2e:deploy-proxy:
+    desc: Install the pass-through proxy with cert-manager-backed serving TLS
+    cmds:
+      - task: e2e:deploy-backend
+      - task: e2e:prepare-webhook-kubeconfig
+      - |
+        {{.HELM}} upgrade --install {{.E2E_RELEASE_NAME}} ./charts/audit-pass-through-apiserver \
+          --kube-context {{.CTX}} \
+          --namespace {{.E2E_PROXY_NAMESPACE}} \
+          --create-namespace \
+          --values test/e2e/values/proxy-cert-manager.yaml \
+          --set image.repository={{.E2E_PROXY_IMAGE_REPOSITORY}} \
+          --set image.tag={{.E2E_PROXY_IMAGE_TAG}}
+      - "{{.KUBECTL}} --context {{.CTX}} -n {{.E2E_PROXY_NAMESPACE}} rollout status deploy/{{.E2E_RELEASE_NAME}} --timeout=180s"
+
+  e2e:prepare:
+    desc: Build, load, and install the full standalone smoke environment
+    cmds:
+      - task: e2e:load-images
+      - task: e2e:deploy-proxy
+
+  e2e:test-smoke:
+    desc: Run the standalone k3d smoke scenario against the aggregated API path
+    cmds:
+      - task: e2e:prepare
+      - |
+        export CTX="{{.CTX}}"
+        export WEBHOOK_NAMESPACE="{{.E2E_WEBHOOK_NAMESPACE}}"
+        export WEBHOOK_SERVICE_NAME="{{.E2E_WEBHOOK_SERVICE_NAME}}"
+        bash test/e2e/smoke.sh
+
+  e2e:cluster-down:
+    desc: Delete the standalone k3d cluster
+    cmds:
+      - "{{.K3D}} cluster delete {{.CLUSTER_NAME}}"
+

@@ -38,6 +38,7 @@ if ! git config --global --get user.email >/dev/null 2>&1; then
 fi
 
 log "Refreshing Git SSH signing configuration"
+bash "${workspace_dir}/.devcontainer/ensure-home-permissions.sh" "${workspace_dir}"
 bash "${workspace_dir}/.devcontainer/sync-signing-key.sh"
 
 log "Downloading Go modules"

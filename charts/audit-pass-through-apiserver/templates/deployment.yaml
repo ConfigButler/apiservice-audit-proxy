@@ -48,10 +48,8 @@ spec:
             {{- if .Values.audit.captureTempDir }}
             - --capture-temp-dir={{ .Values.audit.captureTempDir }}
             {{- end }}
-            {{- if .Values.tls.enabled }}
-            - --tls-cert-file={{ include "audit-pass-through-apiserver.paths.tls" . }}/{{ .Values.tls.certFileName }}
-            - --tls-private-key-file={{ include "audit-pass-through-apiserver.paths.tls" . }}/{{ .Values.tls.keyFileName }}
-            {{- end }}
+            - --tls-cert-file={{ include "audit-pass-through-apiserver.paths.tls" . }}/tls.crt
+            - --tls-private-key-file={{ include "audit-pass-through-apiserver.paths.tls" . }}/tls.key
             {{- if .Values.backend.caSecretName }}
             - --backend-ca-file={{ include "audit-pass-through-apiserver.paths.backendCA" . }}/{{ .Values.backend.caFileName }}
             {{- end }}
@@ -66,22 +64,18 @@ spec:
             {{- end }}
           ports:
             - name: api
-              containerPort: {{ .Values.service.port }}
+              containerPort: {{ .Values.containerPort }}
               protocol: TCP
           livenessProbe:
             httpGet:
               path: /livez
               port: api
-              {{- if .Values.tls.enabled }}
               scheme: HTTPS
-              {{- end }}
           readinessProbe:
             httpGet:
               path: /readyz
               port: api
-              {{- if .Values.tls.enabled }}
               scheme: HTTPS
-              {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           env:
@@ -94,11 +88,9 @@ spec:
             - name: webhook-kubeconfig
               mountPath: {{ include "audit-pass-through-apiserver.paths.webhook" . }}
               readOnly: true
-            {{- if .Values.tls.enabled }}
             - name: serving-tls
               mountPath: {{ include "audit-pass-through-apiserver.paths.tls" . }}
               readOnly: true
-            {{- end }}
             {{- if .Values.backend.caSecretName }}
             - name: backend-ca
               mountPath: {{ include "audit-pass-through-apiserver.paths.backendCA" . }}
@@ -118,11 +110,9 @@ spec:
         - name: webhook-kubeconfig
           secret:
             secretName: {{ required "webhook.kubeconfigSecretName is required" .Values.webhook.kubeconfigSecretName }}
-        {{- if .Values.tls.enabled }}
         - name: serving-tls
           secret:
-            secretName: {{ required "tls.secretName is required when tls.enabled=true" .Values.tls.secretName }}
-        {{- end }}
+            secretName: {{ include "audit-pass-through-apiserver.servingSecretName" . }}
         {{- if .Values.backend.caSecretName }}
         - name: backend-ca
           secret:
@@ -148,4 +138,3 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-

@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: audit-pass-through-mock-audit-webhook
+  namespace: audit-pass-through-e2e
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: audit-pass-through-mock-audit-webhook
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: audit-pass-through-mock-audit-webhook
+    spec:
+      containers:
+        - name: webhook
+          image: audit-pass-through-mock-audit-webhook:e2e-local
+          imagePullPolicy: IfNotPresent
+          args:
+            - --listen-address=:9444
+          ports:
+            - name: http
+              containerPort: 9444
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
