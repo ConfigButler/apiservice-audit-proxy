@@ -14,7 +14,7 @@ vars:
   HELM: '{{.HELM | default "helm"}}'
   K3D: '{{.K3D | default "k3d"}}'
   KUBECTL: '{{.KUBECTL | default "kubectl"}}'
-  E2E_PROXY_IMAGE: '{{.E2E_PROXY_IMAGE | default "audit-pass-through-apiserver:e2e-local"}}'
+  E2E_PROXY_IMAGE: '{{.E2E_PROXY_IMAGE | default "apiservice-audit-proxy:e2e-local"}}'
   E2E_PROXY_IMAGE_REPOSITORY:
     sh: |
       ref='{{.E2E_PROXY_IMAGE}}'
@@ -39,7 +39,7 @@ vars:
   E2E_PROXY_NAMESPACE: '{{.E2E_PROXY_NAMESPACE | default "wardle"}}'
   E2E_WEBHOOK_NAMESPACE: '{{.E2E_WEBHOOK_NAMESPACE | default "audit-pass-through-e2e"}}'
   E2E_WEBHOOK_SERVICE_NAME: '{{.E2E_WEBHOOK_SERVICE_NAME | default "audit-pass-through-mock-audit-webhook"}}'
-  E2E_RELEASE_NAME: '{{.E2E_RELEASE_NAME | default "audit-pass-through-apiserver"}}'
+  E2E_RELEASE_NAME: '{{.E2E_RELEASE_NAME | default "apiservice-audit-proxy"}}'
   E2E_BACKEND_MANIFEST_DIR: '{{.E2E_BACKEND_MANIFEST_DIR | default "test/e2e/setup/manifests/sample-apiserver"}}'
   E2E_PROXY_VALUES_FILE: '{{.E2E_PROXY_VALUES_FILE | default "test/e2e/values/proxy-cert-manager.yaml"}}'
   FLUX_NAMESPACE: '{{.FLUX_NAMESPACE | default "flux-system"}}'
@@ -172,7 +172,7 @@ tasks:
       - task: e2e:prepare-requestheader-client-ca
       - task: e2e:prepare-webhook-kubeconfig
       - |
-        {{.HELM}} upgrade --install {{.E2E_RELEASE_NAME}} ./charts/audit-pass-through-apiserver \
+        {{.HELM}} upgrade --install {{.E2E_RELEASE_NAME}} ./charts/apiservice-audit-proxy \
           --kube-context {{.CTX}} \
           --namespace {{.E2E_PROXY_NAMESPACE}} \
           --create-namespace \

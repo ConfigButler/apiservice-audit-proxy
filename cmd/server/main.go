@@ -17,9 +17,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ConfigButler/audit-pass-through-apiserver/pkg/identity"
-	auditproxy "github.com/ConfigButler/audit-pass-through-apiserver/pkg/proxy"
-	"github.com/ConfigButler/audit-pass-through-apiserver/pkg/webhook"
+	"github.com/ConfigButler/apiservice-audit-proxy/pkg/identity"
+	auditproxy "github.com/ConfigButler/apiservice-audit-proxy/pkg/proxy"
+	"github.com/ConfigButler/apiservice-audit-proxy/pkg/webhook"
 )
 
 const (

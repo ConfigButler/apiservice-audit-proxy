@@ -1,6 +1,6 @@
 {{- if .Values.apiService.enabled }}
-{{- $skipVerify := eq (include "audit-pass-through-apiserver.apiServiceSkipVerify" .) "true" -}}
-{{- $mode := include "audit-pass-through-apiserver.certificateMode" . -}}
+{{- $skipVerify := eq (include "apiservice-audit-proxy.apiServiceSkipVerify" .) "true" -}}
+{{- $mode := include "apiservice-audit-proxy.certificateMode" . -}}
 {{- if and (eq $mode "existing-secret") (not $skipVerify) (not .Values.apiService.caBundle) -}}
 {{- fail "apiService.caBundle or apiService.insecureSkipTLSVerify=true is required when apiService.enabled=true and certificates.mode=existing-secret" -}}
 {{- end }}
@@ -11,21 +11,21 @@ metadata:
   {{- if or (eq $mode "cert-manager") .Values.apiService.annotations }}
   annotations:
     {{- if eq $mode "cert-manager" }}
-    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "audit-pass-through-apiserver.servingCertificateName" . }}
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "apiservice-audit-proxy.servingCertificateName" . }}
     {{- end }}
     {{- with .Values.apiService.annotations }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
   {{- end }}
   labels:
-    {{- include "audit-pass-through-apiserver.labels" . | nindent 4 }}
+    {{- include "apiservice-audit-proxy.labels" . | nindent 4 }}
 spec:
   group: {{ required "apiService.group is required when apiService.enabled=true" .Values.apiService.group }}
   groupPriorityMinimum: {{ .Values.apiService.groupPriorityMinimum }}
   versionPriority: {{ .Values.apiService.versionPriority }}
   version: {{ required "apiService.version is required when apiService.enabled=true" .Values.apiService.version }}
   service:
-    name: {{ include "audit-pass-through-apiserver.fullname" . }}
+    name: {{ include "apiservice-audit-proxy.fullname" . }}
     namespace: {{ .Release.Namespace }}
     port: {{ .Values.service.port }}
   {{- if $skipVerify }}

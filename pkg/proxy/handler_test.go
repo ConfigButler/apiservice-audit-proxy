@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ConfigButler/audit-pass-through-apiserver/pkg/identity"
+	"github.com/ConfigButler/apiservice-audit-proxy/pkg/identity"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	auditv1 "k8s.io/apiserver/pkg/apis/audit/v1"

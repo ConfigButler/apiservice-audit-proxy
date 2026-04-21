@@ -16,7 +16,7 @@ build-ci-container ──┬── validate-devcontainer
 
 ## Design: build once, run everywhere
 
-The CI container (`audit-pass-through-apiserver-ci`) is built from `.devcontainer/Dockerfile` (target `ci`) **once** in `build-ci-container`, then **pushed to GHCR** and referenced by all downstream jobs via the `container:` directive. This means:
+The CI container (`ghcr.io/configbutler/apiservice-audit-proxy-ci:<sha>`) is built from `.devcontainer/Dockerfile` (target `ci`) **once** in `build-ci-container`, then **pushed to GHCR** and referenced by all downstream jobs via the `container:` directive. This means:
 
 - Each job pulls the pre-built image from the registry rather than rebuilding it.
 - Steps in `lint`, `test`, `build`, and `lint-helm` run directly inside the container — no `docker run` wrapper needed.
@@ -66,5 +66,5 @@ git push origin v1.2.3
 ```
 
 The release job publishes:
-- `ghcr.io/<owner>/audit-pass-through-apiserver:<tag>` and `:latest`
+- `ghcr.io/configbutler/apiservice-audit-proxy:<tag>` and `:latest`
 - A GitHub release containing `dist/install.yaml`, the Helm chart `.tgz`, and `dist/checksums.txt`

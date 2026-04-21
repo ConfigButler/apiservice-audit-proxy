@@ -1,15 +1,15 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "audit-pass-through-apiserver.fullname" . }}
+  name: {{ include "apiservice-audit-proxy.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "audit-pass-through-apiserver.labels" . | nindent 4 }}
+    {{- include "apiservice-audit-proxy.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
-      {{- include "audit-pass-through-apiserver.selectorLabels" . | nindent 6 }}
+      {{- include "apiservice-audit-proxy.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       annotations:
@@ -18,13 +18,13 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       labels:
-        {{- include "audit-pass-through-apiserver.selectorLabels" . | nindent 8 }}
+        {{- include "apiservice-audit-proxy.selectorLabels" . | nindent 8 }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      serviceAccountName: {{ include "audit-pass-through-apiserver.serviceAccountName" . }}
+      serviceAccountName: {{ include "apiservice-audit-proxy.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
@@ -36,7 +36,7 @@ spec:
           args:
             - --listen-address={{ .Values.listenAddress }}
             - --backend-url={{ required "backend.url is required" .Values.backend.url }}
-            - --webhook-kubeconfig={{ include "audit-pass-through-apiserver.paths.webhook" . }}/{{ .Values.webhook.kubeconfigKey }}
+            - --webhook-kubeconfig={{ include "apiservice-audit-proxy.paths.webhook" . }}/{{ .Values.webhook.kubeconfigKey }}
             - --webhook-timeout={{ .Values.webhook.timeout }}
             - --max-audit-body-bytes={{ .Values.audit.maxBodyBytes }}
             {{- if .Values.backend.insecureSkipVerify }}
@@ -48,17 +48,17 @@ spec:
             {{- if .Values.audit.captureTempDir }}
             - --capture-temp-dir={{ .Values.audit.captureTempDir }}
             {{- end }}
-            - --tls-cert-file={{ include "audit-pass-through-apiserver.paths.tls" . }}/tls.crt
-            - --tls-private-key-file={{ include "audit-pass-through-apiserver.paths.tls" . }}/tls.key
+            - --tls-cert-file={{ include "apiservice-audit-proxy.paths.tls" . }}/tls.crt
+            - --tls-private-key-file={{ include "apiservice-audit-proxy.paths.tls" . }}/tls.key
             {{- if .Values.backend.caSecretName }}
-            - --backend-ca-file={{ include "audit-pass-through-apiserver.paths.backendCA" . }}/{{ .Values.backend.caFileName }}
+            - --backend-ca-file={{ include "apiservice-audit-proxy.paths.backendCA" . }}/{{ .Values.backend.caFileName }}
             {{- end }}
             {{- if .Values.backend.clientCertSecretName }}
-            - --backend-client-cert-file={{ include "audit-pass-through-apiserver.paths.backendClient" . }}/{{ .Values.backend.clientCertFileName }}
-            - --backend-client-key-file={{ include "audit-pass-through-apiserver.paths.backendClient" . }}/{{ .Values.backend.clientKeyFileName }}
+            - --backend-client-cert-file={{ include "apiservice-audit-proxy.paths.backendClient" . }}/{{ .Values.backend.clientCertFileName }}
+            - --backend-client-key-file={{ include "apiservice-audit-proxy.paths.backendClient" . }}/{{ .Values.backend.clientKeyFileName }}
             {{- end }}
             {{- if .Values.requestHeader.clientCASecretName }}
-            - --client-ca-file={{ include "audit-pass-through-apiserver.paths.requestHeaderCA" . }}/{{ .Values.requestHeader.clientCAFileName }}
+            - --client-ca-file={{ include "apiservice-audit-proxy.paths.requestHeaderCA" . }}/{{ .Values.requestHeader.clientCAFileName }}
             {{- end }}
             {{- with .Values.extraArgs }}
             {{- range . }}
@@ -89,24 +89,24 @@ spec:
             - name: tmp
               mountPath: /tmp
             - name: webhook-kubeconfig
-              mountPath: {{ include "audit-pass-through-apiserver.paths.webhook" . }}
+              mountPath: {{ include "apiservice-audit-proxy.paths.webhook" . }}
               readOnly: true
             - name: serving-tls
-              mountPath: {{ include "audit-pass-through-apiserver.paths.tls" . }}
+              mountPath: {{ include "apiservice-audit-proxy.paths.tls" . }}
               readOnly: true
             {{- if .Values.backend.caSecretName }}
             - name: backend-ca
-              mountPath: {{ include "audit-pass-through-apiserver.paths.backendCA" . }}
+              mountPath: {{ include "apiservice-audit-proxy.paths.backendCA" . }}
               readOnly: true
             {{- end }}
             {{- if .Values.backend.clientCertSecretName }}
             - name: backend-client
-              mountPath: {{ include "audit-pass-through-apiserver.paths.backendClient" . }}
+              mountPath: {{ include "apiservice-audit-proxy.paths.backendClient" . }}
               readOnly: true
             {{- end }}
             {{- if .Values.requestHeader.clientCASecretName }}
             - name: requestheader-client-ca
-              mountPath: {{ include "audit-pass-through-apiserver.paths.requestHeaderCA" . }}
+              mountPath: {{ include "apiservice-audit-proxy.paths.requestHeaderCA" . }}
               readOnly: true
             {{- end }}
             {{- with .Values.volumeMounts }}
@@ -120,7 +120,7 @@ spec:
             secretName: {{ required "webhook.kubeconfigSecretName is required" .Values.webhook.kubeconfigSecretName }}
         - name: serving-tls
           secret:
-            secretName: {{ include "audit-pass-through-apiserver.servingSecretName" . }}
+            secretName: {{ include "apiservice-audit-proxy.servingSecretName" . }}
         {{- if .Values.backend.caSecretName }}
         - name: backend-ca
           secret:

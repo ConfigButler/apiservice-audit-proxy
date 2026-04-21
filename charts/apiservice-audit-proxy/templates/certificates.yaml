@@ -1,12 +1,12 @@
-{{- if eq (include "audit-pass-through-apiserver.certificateMode" .) "cert-manager" }}
+{{- if eq (include "apiservice-audit-proxy.certificateMode" .) "cert-manager" }}
 {{- if .Values.certificates.certManager.createSelfSignedIssuer }}
 apiVersion: cert-manager.io/v1
 kind: Issuer
 metadata:
-  name: {{ include "audit-pass-through-apiserver.servingIssuerName" . }}
+  name: {{ include "apiservice-audit-proxy.servingIssuerName" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "audit-pass-through-apiserver.labels" . | nindent 4 }}
+    {{- include "apiservice-audit-proxy.labels" . | nindent 4 }}
 spec:
   selfSigned: {}
 ---
@@ -14,20 +14,20 @@ spec:
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
-  name: {{ include "audit-pass-through-apiserver.servingCertificateName" . }}
+  name: {{ include "apiservice-audit-proxy.servingCertificateName" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "audit-pass-through-apiserver.labels" . | nindent 4 }}
+    {{- include "apiservice-audit-proxy.labels" . | nindent 4 }}
 spec:
-  secretName: {{ include "audit-pass-through-apiserver.servingSecretName" . }}
+  secretName: {{ include "apiservice-audit-proxy.servingSecretName" . }}
   duration: {{ .Values.certificates.certManager.duration }}
   renewBefore: {{ .Values.certificates.certManager.renewBefore }}
   privateKey:
     rotationPolicy: Always
   issuerRef:
-    name: {{ include "audit-pass-through-apiserver.servingIssuerName" . }}
+    name: {{ include "apiservice-audit-proxy.servingIssuerName" . }}
     kind: {{ .Values.certificates.certManager.issuerRef.kind }}
     group: {{ .Values.certificates.certManager.issuerRef.group }}
   dnsNames:
-    {{- include "audit-pass-through-apiserver.servingDNSNames" . | nindent 4 }}
+    {{- include "apiservice-audit-proxy.servingDNSNames" . | nindent 4 }}
 {{- end }}

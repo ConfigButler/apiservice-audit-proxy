@@ -13,12 +13,12 @@ includes:
     flatten: true
 
 vars:
-  APP_NAME: audit-pass-through-apiserver
-  IMAGE_REPOSITORY: '{{.IMAGE_REPOSITORY | default "audit-pass-through-apiserver"}}'
+  APP_NAME: apiservice-audit-proxy
+  IMAGE_REPOSITORY: '{{.IMAGE_REPOSITORY | default "apiservice-audit-proxy"}}'
   IMAGE_TAG: '{{.IMAGE_TAG | default "dev"}}'
-  CHART_DIR: charts/audit-pass-through-apiserver
+  CHART_DIR: charts/apiservice-audit-proxy
   DIST_DIR: dist
-  RELEASE_NAME: '{{.RELEASE_NAME | default "audit-pass-through-apiserver"}}'
+  RELEASE_NAME: '{{.RELEASE_NAME | default "apiservice-audit-proxy"}}'
   RELEASE_NAMESPACE: '{{.RELEASE_NAMESPACE | default "audit-pass-through-system"}}'
 
 tasks:

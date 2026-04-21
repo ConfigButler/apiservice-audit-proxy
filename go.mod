@@ -1,4 +1,4 @@
-module github.com/ConfigButler/audit-pass-through-apiserver
+module github.com/ConfigButler/apiservice-audit-proxy
 
 go 1.26.2
 

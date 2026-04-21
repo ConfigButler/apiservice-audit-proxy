@@ -1,5 +1,5 @@
 apiVersion: v2
-name: audit-pass-through-apiserver
+name: apiservice-audit-proxy
 description: >-
   An aggregated API pass-through proxy that emits richer audit.k8s.io/v1
   ResponseComplete events for supported mutating requests
@@ -12,13 +12,13 @@ keywords:
   - apiserver
   - aggregation
   - proxy
-home: https://github.com/ConfigButler/audit-pass-through-apiserver
+home: https://github.com/ConfigButler/apiservice-audit-proxy
 sources:
-  - https://github.com/ConfigButler/audit-pass-through-apiserver
+  - https://github.com/ConfigButler/apiservice-audit-proxy
 maintainers:
   - name: ConfigButler Team
     url: https://github.com/configbutler
 annotations:
-  org.opencontainers.image.source: https://github.com/ConfigButler/audit-pass-through-apiserver
+  org.opencontainers.image.source: https://github.com/ConfigButler/apiservice-audit-proxy
   org.opencontainers.image.description: Audit pass-through aggregated API server
 

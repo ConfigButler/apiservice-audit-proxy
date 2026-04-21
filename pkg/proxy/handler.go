@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	auditevents "github.com/ConfigButler/audit-pass-through-apiserver/pkg/audit"
-	"github.com/ConfigButler/audit-pass-through-apiserver/pkg/identity"
-	"github.com/ConfigButler/audit-pass-through-apiserver/pkg/webhook"
+	auditevents "github.com/ConfigButler/apiservice-audit-proxy/pkg/audit"
+	"github.com/ConfigButler/apiservice-audit-proxy/pkg/identity"
+	"github.com/ConfigButler/apiservice-audit-proxy/pkg/webhook"
 	authnv1 "k8s.io/api/authentication/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 	auditv1 "k8s.io/apiserver/pkg/apis/audit/v1"

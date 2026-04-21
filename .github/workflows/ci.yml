@@ -9,13 +9,13 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: audit-pass-through-apiserver
-  CI_IMAGE_NAME: audit-pass-through-apiserver-ci
-  DEV_IMAGE_NAME: audit-pass-through-apiserver-devcontainer
-  CI_CACHE_SCOPE: audit-pass-through-apiserver-ci
-  DEV_CACHE_SCOPE: audit-pass-through-apiserver-devcontainer
-  IMAGE_CACHE_SCOPE: audit-pass-through-apiserver-image
-  RELEASE_CACHE_SCOPE: audit-pass-through-apiserver-release
+  IMAGE_NAME: configbutler/apiservice-audit-proxy
+  CI_IMAGE_NAME: configbutler/apiservice-audit-proxy-ci
+  DEV_IMAGE_NAME: apiservice-audit-proxy-devcontainer
+  CI_CACHE_SCOPE: apiservice-audit-proxy-ci
+  DEV_CACHE_SCOPE: apiservice-audit-proxy-devcontainer
+  IMAGE_CACHE_SCOPE: apiservice-audit-proxy-image
+  RELEASE_CACHE_SCOPE: apiservice-audit-proxy-release
   KUBECTL_VERSION: v1.35.3
   HELM_VERSION: v4.1.4
   K3D_VERSION: v5.8.3
@@ -54,7 +54,7 @@ jobs:
       - name: Set image name
         id: image
         run: |
-          IMAGE="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.CI_IMAGE_NAME }}:${{ github.sha }}"
+          IMAGE="${{ env.REGISTRY }}/${{ env.CI_IMAGE_NAME }}:${{ github.sha }}"
           echo "name=${IMAGE}" >> $GITHUB_OUTPUT
 
       - name: Build and push CI container
@@ -344,8 +344,8 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           cache-from: type=gha,scope=${{ env.RELEASE_CACHE_SCOPE }}
           cache-to: type=gha,mode=max,scope=${{ env.RELEASE_CACHE_SCOPE }}
 

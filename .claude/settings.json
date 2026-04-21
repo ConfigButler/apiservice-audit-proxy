@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(k3d cluster *)",
+      "Bash(task e2e:test-smoke)",
+      "Bash(kubectl --context k3d-audit-pass-through-e2e get nodes)"
+    ]
+  }
+}
