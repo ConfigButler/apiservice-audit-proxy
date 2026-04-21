@@ -8,10 +8,19 @@ on:
     branches: [main]
 
 env:
-  CI_IMAGE_NAME: audit-pass-through-apiserver-ci
-  DEV_IMAGE_NAME: audit-pass-through-apiserver-devcontainer
   REGISTRY: ghcr.io
   IMAGE_NAME: audit-pass-through-apiserver
+  CI_IMAGE_NAME: audit-pass-through-apiserver-ci
+  DEV_IMAGE_NAME: audit-pass-through-apiserver-devcontainer
+  CI_CACHE_SCOPE: audit-pass-through-apiserver-ci
+  DEV_CACHE_SCOPE: audit-pass-through-apiserver-devcontainer
+  IMAGE_CACHE_SCOPE: audit-pass-through-apiserver-image
+  RELEASE_CACHE_SCOPE: audit-pass-through-apiserver-release
+  KUBECTL_VERSION: v1.35.3
+  HELM_VERSION: v4.1.4
+  K3D_VERSION: v5.8.3
+  FLUX_VERSION: 2.8.5
+  TASK_VERSION: v3.49.1
 
 permissions:
   contents: read
@@ -21,46 +30,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  validate-devcontainer:
+  build-ci-container:
+    name: Build CI Base Container
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Build dev container
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: ./.devcontainer/Dockerfile
-          target: dev
-          push: false
-          load: true
-          tags: ${{ env.DEV_IMAGE_NAME }}:test
-          cache-from: type=gha,scope=audit-pass-through-apiserver-devcontainer
-          cache-to: type=gha,mode=max,scope=audit-pass-through-apiserver-devcontainer
-
-      - name: Validate dev container tools
-        run: |
-          docker run --rm ${{ env.DEV_IMAGE_NAME }}:test bash -lc '
-            set -e
-            go version
-            helm version
-            golangci-lint version
-            flux --version
-            k3d version
-            tilt version
-            task --version
-            bash -ic "complete -p task >/dev/null"
-          '
-
-  validate:
-    runs-on: ubuntu-latest
-    needs: validate-devcontainer
-    steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v6
 
       - name: Set up Docker Buildx
@@ -70,63 +44,250 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
-          file: ./.devcontainer/Dockerfile
+          file: .devcontainer/Dockerfile
           target: ci
           push: false
           load: true
-          tags: ${{ env.CI_IMAGE_NAME }}:test
-          cache-from: type=gha,scope=audit-pass-through-apiserver-ci
-          cache-to: type=gha,mode=max,scope=audit-pass-through-apiserver-ci
+          tags: ${{ env.CI_IMAGE_NAME }}:${{ github.sha }}
+          cache-from: type=gha,scope=${{ env.CI_CACHE_SCOPE }}
+          cache-to: type=gha,mode=max,scope=${{ env.CI_CACHE_SCOPE }}
 
       - name: Validate CI container tools
         run: |
-          docker run --rm ${{ env.CI_IMAGE_NAME }}:test bash -lc '
-            set -e
+          docker run --rm ${{ env.CI_IMAGE_NAME }}:${{ github.sha }} bash -lc '
+            set -euo pipefail
             go version
+            kubectl version --client
+            kustomize version
             helm version
             golangci-lint version
+            controller-gen --version
+            setup-envtest --help >/dev/null
             task --version
           '
 
-      - name: Run project checks
+  validate-devcontainer:
+    name: Validate Dev Container
+    runs-on: ubuntu-latest
+    needs: build-ci-container
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build dev container
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: .devcontainer/Dockerfile
+          target: dev
+          push: false
+          load: true
+          tags: ${{ env.DEV_IMAGE_NAME }}:test
+          cache-from: |
+            type=gha,scope=${{ env.CI_CACHE_SCOPE }}
+            type=gha,scope=${{ env.DEV_CACHE_SCOPE }}
+          cache-to: type=gha,mode=max,scope=${{ env.DEV_CACHE_SCOPE }}
+
+      - name: Validate dev container tools
+        run: |
+          docker run --rm ${{ env.DEV_IMAGE_NAME }}:test bash -lc '
+            set -euo pipefail
+            go version
+            kubectl version --client
+            kustomize version
+            helm version
+            golangci-lint version
+            flux --version
+            k3d version
+            tilt version
+            task --version
+            bash -ic "complete -p task >/dev/null"
+          '
+
+  lint:
+    name: Lint Go Code
+    runs-on: ubuntu-latest
+    needs: build-ci-container
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build CI container
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: .devcontainer/Dockerfile
+          target: ci
+          push: false
+          load: true
+          tags: ${{ env.CI_IMAGE_NAME }}:${{ github.sha }}
+          cache-from: type=gha,scope=${{ env.CI_CACHE_SCOPE }}
+
+      - name: Check formatting and run golangci-lint
         run: |
           docker run --rm \
             -v "${GITHUB_WORKSPACE}:/workspace" \
             -w /workspace \
-            ${{ env.CI_IMAGE_NAME }}:test \
+            ${{ env.CI_IMAGE_NAME }}:${{ github.sha }} \
             bash -lc '
-              set -e
+              set -euo pipefail
               git config --global --add safe.directory /workspace
               task fmt:check
               task lint
+            '
+
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: build-ci-container
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build CI container
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: .devcontainer/Dockerfile
+          target: ci
+          push: false
+          load: true
+          tags: ${{ env.CI_IMAGE_NAME }}:${{ github.sha }}
+          cache-from: type=gha,scope=${{ env.CI_CACHE_SCOPE }}
+
+      - name: Run unit tests
+        run: |
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/workspace" \
+            -w /workspace \
+            ${{ env.CI_IMAGE_NAME }}:${{ github.sha }} \
+            bash -lc '
+              set -euo pipefail
+              git config --global --add safe.directory /workspace
               task test
+            '
+
+  build:
+    name: Build Go Binary
+    runs-on: ubuntu-latest
+    needs: build-ci-container
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build CI container
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: .devcontainer/Dockerfile
+          target: ci
+          push: false
+          load: true
+          tags: ${{ env.CI_IMAGE_NAME }}:${{ github.sha }}
+          cache-from: type=gha,scope=${{ env.CI_CACHE_SCOPE }}
+
+      - name: Build server binary
+        run: |
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/workspace" \
+            -w /workspace \
+            ${{ env.CI_IMAGE_NAME }}:${{ github.sha }} \
+            bash -lc '
+              set -euo pipefail
+              git config --global --add safe.directory /workspace
               task build
+            '
+
+  lint-helm:
+    name: Lint Helm Chart And Build Release Bundle
+    runs-on: ubuntu-latest
+    needs: build-ci-container
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build CI container
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: .devcontainer/Dockerfile
+          target: ci
+          push: false
+          load: true
+          tags: ${{ env.CI_IMAGE_NAME }}:${{ github.sha }}
+          cache-from: type=gha,scope=${{ env.CI_CACHE_SCOPE }}
+
+      - name: Build release bundle
+        run: |
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/workspace" \
+            -w /workspace \
+            ${{ env.CI_IMAGE_NAME }}:${{ github.sha }} \
+            bash -lc '
+              set -euo pipefail
+              git config --global --add safe.directory /workspace
               task helm:lint
               task dist
             '
 
-      - name: Build container
+      - name: Upload release bundle artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-bundle
+          path: dist
+          if-no-files-found: error
+
+  docker-build:
+    name: Build Container Image
+    runs-on: ubuntu-latest
+    needs:
+      - lint
+      - test
+      - build
+      - lint-helm
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build application image
         uses: docker/build-push-action@v7
         with:
           context: .
           push: false
           load: false
           tags: ${{ env.IMAGE_NAME }}:test
-          cache-from: type=gha,scope=audit-pass-through-apiserver-image
-          cache-to: type=gha,mode=max,scope=audit-pass-through-apiserver-image
-
-      - name: Upload dist artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: audit-pass-through-dist
-          path: dist
-          if-no-files-found: error
+          cache-from: type=gha,scope=${{ env.IMAGE_CACHE_SCOPE }}
+          cache-to: type=gha,mode=max,scope=${{ env.IMAGE_CACHE_SCOPE }}
 
   e2e-smoke:
+    name: E2E Smoke
     runs-on: ubuntu-latest
-    needs: validate
+    needs:
+      - lint
+      - test
+      - build
+      - lint-helm
+      - docker-build
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v6
 
       - name: Set up Go
@@ -134,21 +295,38 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Set up kubectl
-        uses: azure/setup-kubectl@v4
-        with:
-          version: v1.35.3
-
-      - name: Set up Helm
-        uses: azure/setup-helm@v4
-        with:
-          version: v4.1.4
-
-      - name: Install Task, Flux, and k3d
+      - name: Install kubectl
         run: |
-          curl -fsSL https://taskfile.dev/install.sh | sudo sh -s -- -d -b /usr/local/bin
-          curl -fsSL https://fluxcd.io/install.sh | sudo bash
-          curl -fsSL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | sudo bash
+          curl -fsSL -o /tmp/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          chmod +x /tmp/kubectl
+          sudo mv /tmp/kubectl /usr/local/bin/kubectl
+
+      - name: Install Helm
+        run: |
+          curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" \
+            | tar -xzO linux-amd64/helm > /tmp/helm
+          chmod +x /tmp/helm
+          sudo mv /tmp/helm /usr/local/bin/helm
+
+      - name: Install Task
+        run: |
+          curl -fsSL "https://github.com/go-task/task/releases/download/${TASK_VERSION}/task_linux_amd64.tar.gz" \
+            | tar -xzO task > /tmp/task
+          chmod +x /tmp/task
+          sudo mv /tmp/task /usr/local/bin/task
+
+      - name: Install Flux
+        run: |
+          curl -fsSL "https://github.com/fluxcd/flux2/releases/download/v${FLUX_VERSION}/flux_${FLUX_VERSION}_linux_amd64.tar.gz" \
+            | tar -xzO flux > /tmp/flux
+          chmod +x /tmp/flux
+          sudo mv /tmp/flux /usr/local/bin/flux
+
+      - name: Install k3d
+        run: |
+          curl -fsSL -o /tmp/k3d "https://github.com/k3d-io/k3d/releases/download/${K3D_VERSION}/k3d-linux-amd64"
+          chmod +x /tmp/k3d
+          sudo mv /tmp/k3d /usr/local/bin/k3d
 
       - name: Verify Docker
         run: docker info
@@ -165,23 +343,24 @@ jobs:
           kubectl get certificaterequests,certificates,issuers -A || true
 
   release:
+    name: Release
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     needs:
-      - validate
+      - docker-build
       - e2e-smoke
     permissions:
       contents: write
       packages: write
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Download dist artifacts
+      - name: Download release bundle artifacts
         uses: actions/download-artifact@v7
         with:
-          name: audit-pass-through-dist
-          path: dist
+          name: release-bundle
+          path: .
 
       - name: Log in to GHCR
         uses: docker/login-action@v4
@@ -201,8 +380,8 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
             ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest
-          cache-from: type=gha,scope=audit-pass-through-apiserver-release
-          cache-to: type=gha,mode=max,scope=audit-pass-through-apiserver-release
+          cache-from: type=gha,scope=${{ env.RELEASE_CACHE_SCOPE }}
+          cache-to: type=gha,mode=max,scope=${{ env.RELEASE_CACHE_SCOPE }}
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
