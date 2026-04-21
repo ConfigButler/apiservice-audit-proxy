@@ -20,7 +20,9 @@ func spoolBody(body io.ReadCloser, tempDir string, maxCaptureBytes int64) (*spoo
 	if body == nil {
 		body = http.NoBody
 	}
-	defer body.Close()
+	defer func() {
+		_ = body.Close()
+	}()
 
 	file, err := os.CreateTemp(tempDir, "audit-pass-through-body-*")
 	if err != nil {

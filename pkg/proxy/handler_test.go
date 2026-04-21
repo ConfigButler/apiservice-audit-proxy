@@ -64,7 +64,9 @@ func TestHandler_MutatingRequest_ProxiesAndEmitsEvent(t *testing.T) {
 	handler.ServeHTTP(recorder, req)
 
 	resp := recorder.Result()
-	defer resp.Body.Close()
+	defer func() {
+		require.NoError(t, resp.Body.Close())
+	}()
 
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
@@ -123,7 +125,9 @@ func TestHandler_GetRequest_PassesThroughWithoutAuditDelivery(t *testing.T) {
 	handler.ServeHTTP(recorder, req)
 
 	resp := recorder.Result()
-	defer resp.Body.Close()
+	defer func() {
+		require.NoError(t, resp.Body.Close())
+	}()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	select {
@@ -165,7 +169,9 @@ func TestHandler_WebhookFailure_DoesNotFailProxiedResponse(t *testing.T) {
 	handler.ServeHTTP(recorder, req)
 
 	resp := recorder.Result()
-	defer resp.Body.Close()
+	defer func() {
+		require.NoError(t, resp.Body.Close())
+	}()
 	assert.Equal(t, http.StatusCreated, resp.StatusCode)
 }
 
@@ -214,7 +220,9 @@ func TestHandler_AuditedPath_StripsHopByHopHeaders(t *testing.T) {
 	handler.ServeHTTP(recorder, req)
 
 	resp := recorder.Result()
-	defer resp.Body.Close()
+	defer func() {
+		require.NoError(t, resp.Body.Close())
+	}()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Empty(t, resp.Header.Get("Connection"))
 	assert.Empty(t, resp.Header.Get("Proxy-Connection"))

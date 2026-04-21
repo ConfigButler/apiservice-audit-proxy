@@ -1,0 +1,151 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "audit-pass-through-apiserver.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "audit-pass-through-apiserver.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "audit-pass-through-apiserver.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        kubectl.kubernetes.io/default-container: server
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "audit-pass-through-apiserver.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "audit-pass-through-apiserver.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: server
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          args:
+            - --listen-address={{ .Values.listenAddress }}
+            - --backend-url={{ required "backend.url is required" .Values.backend.url }}
+            - --webhook-kubeconfig={{ include "audit-pass-through-apiserver.paths.webhook" . }}/{{ .Values.webhook.kubeconfigKey }}
+            - --webhook-timeout={{ .Values.webhook.timeout }}
+            - --max-audit-body-bytes={{ .Values.audit.maxBodyBytes }}
+            {{- if .Values.backend.insecureSkipVerify }}
+            - --backend-insecure-skip-verify
+            {{- end }}
+            {{- if .Values.backend.serverName }}
+            - --backend-server-name={{ .Values.backend.serverName }}
+            {{- end }}
+            {{- if .Values.audit.captureTempDir }}
+            - --capture-temp-dir={{ .Values.audit.captureTempDir }}
+            {{- end }}
+            {{- if .Values.tls.enabled }}
+            - --tls-cert-file={{ include "audit-pass-through-apiserver.paths.tls" . }}/{{ .Values.tls.certFileName }}
+            - --tls-private-key-file={{ include "audit-pass-through-apiserver.paths.tls" . }}/{{ .Values.tls.keyFileName }}
+            {{- end }}
+            {{- if .Values.backend.caSecretName }}
+            - --backend-ca-file={{ include "audit-pass-through-apiserver.paths.backendCA" . }}/{{ .Values.backend.caFileName }}
+            {{- end }}
+            {{- if .Values.backend.clientCertSecretName }}
+            - --backend-client-cert-file={{ include "audit-pass-through-apiserver.paths.backendClient" . }}/{{ .Values.backend.clientCertFileName }}
+            - --backend-client-key-file={{ include "audit-pass-through-apiserver.paths.backendClient" . }}/{{ .Values.backend.clientKeyFileName }}
+            {{- end }}
+            {{- with .Values.extraArgs }}
+            {{- range . }}
+            - {{ . | quote }}
+            {{- end }}
+            {{- end }}
+          ports:
+            - name: api
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: api
+              {{- if .Values.tls.enabled }}
+              scheme: HTTPS
+              {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: api
+              {{- if .Values.tls.enabled }}
+              scheme: HTTPS
+              {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          env:
+            {{- with .Values.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: webhook-kubeconfig
+              mountPath: {{ include "audit-pass-through-apiserver.paths.webhook" . }}
+              readOnly: true
+            {{- if .Values.tls.enabled }}
+            - name: serving-tls
+              mountPath: {{ include "audit-pass-through-apiserver.paths.tls" . }}
+              readOnly: true
+            {{- end }}
+            {{- if .Values.backend.caSecretName }}
+            - name: backend-ca
+              mountPath: {{ include "audit-pass-through-apiserver.paths.backendCA" . }}
+              readOnly: true
+            {{- end }}
+            {{- if .Values.backend.clientCertSecretName }}
+            - name: backend-client
+              mountPath: {{ include "audit-pass-through-apiserver.paths.backendClient" . }}
+              readOnly: true
+            {{- end }}
+            {{- with .Values.volumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: webhook-kubeconfig
+          secret:
+            secretName: {{ required "webhook.kubeconfigSecretName is required" .Values.webhook.kubeconfigSecretName }}
+        {{- if .Values.tls.enabled }}
+        - name: serving-tls
+          secret:
+            secretName: {{ required "tls.secretName is required when tls.enabled=true" .Values.tls.secretName }}
+        {{- end }}
+        {{- if .Values.backend.caSecretName }}
+        - name: backend-ca
+          secret:
+            secretName: {{ .Values.backend.caSecretName }}
+        {{- end }}
+        {{- if .Values.backend.clientCertSecretName }}
+        - name: backend-client
+          secret:
+            secretName: {{ .Values.backend.clientCertSecretName }}
+        {{- end }}
+        {{- with .Values.volumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+

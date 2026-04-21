@@ -1,0 +1,13 @@
+1. Create or provide the webhook kubeconfig Secret referenced by `webhook.kubeconfigSecretName`.
+2. Set `backend.url` to the real aggregated backend this proxy should forward to.
+3. If you enable `tls.enabled`, provide `tls.secretName` with `tls.crt` and `tls.key`.
+4. If the backend requires custom trust or mTLS, set `backend.caSecretName` and/or `backend.clientCertSecretName`.
+
+Example:
+
+  helm upgrade --install {{ .Release.Name }} {{ .Chart.Name }} \
+    --namespace {{ .Release.Namespace }} \
+    --create-namespace \
+    --set backend.url=https://sample-apiserver.wardle.svc:443 \
+    --set webhook.kubeconfigSecretName=audit-pass-through-webhook-kubeconfig
+

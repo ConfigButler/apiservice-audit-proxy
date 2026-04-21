@@ -1,0 +1,40 @@
+{
+  "name": "audit-pass-through-apiserver",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/${localWorkspaceFolderBasename},type=bind",
+  "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "userUid": "automatic",
+      "userGid": "automatic",
+      "username": "vscode"
+    },
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {},
+    "ghcr.io/devcontainers/features/git:1": {}
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "golang.go",
+        "ms-kubernetes-tools.vscode-kubernetes-tools",
+        "ms-azuretools.vscode-docker"
+      ],
+      "settings": {
+        "go.toolsManagement.checkForUpdates": "local",
+        "go.useLanguageServer": true,
+        "go.gopath": "/go"
+      }
+    }
+  },
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+  "remoteUser": "vscode",
+  "mounts": [
+    "source=gomodcache,target=/go/pkg/mod,type=volume",
+    "source=gobuildcache,target=/home/vscode/.cache/go-build,type=volume",
+    "source=auditproxycodexconfig,target=/home/vscode/.codex,type=volume",
+    "source=auditproxyclaudeconfig,target=/home/vscode/.claude,type=volume"
+  ]
+}

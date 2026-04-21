@@ -16,31 +16,40 @@ The e2e hookup plan now lives in the main project docs because it belongs to the
 This file is narrower. It covers only the **prototype implementation gaps** that matter before that
 e2e plan can be executed cleanly.
 
+## Status
+
+The prototype now has the first runtime wiring needed for the e2e hookup:
+
+- inbound HTTPS serving via `--tls-cert-file` and `--tls-private-key-file`
+- explicit backend HTTPS behavior via:
+  - `--backend-insecure-skip-verify`
+  - `--backend-ca-file`
+  - `--backend-client-cert-file`
+  - `--backend-client-key-file`
+  - `--backend-server-name`
+
+That means the remaining work is narrower now: document the trust model clearly, then wire the
+prototype into the main project's e2e environment.
+
 ## Load-Bearing Remaining Work
 
-### 1. Inbound TLS is a prerequisite, not a future polish item
+### 1. Inbound TLS has landed for the prototype
 
-The current prototype serves plain HTTP only.
+The prototype binary can now serve HTTPS directly when mounted cert/key files are provided.
 
-That is not enough for the `APIService` spike, because kube-apiserver will dial the aggregated
-backend over HTTPS. Even with:
+This keeps the preferred e2e path intact:
 
-- `spec.insecureSkipTLSVerify: true`
+- create a hand-rolled self-signed Kubernetes Secret
+- mount that Secret into the proxy pod
+- point the proxy at the mounted `tls.crt` and `tls.key`
+- rely on `APIService.spec.insecureSkipTLSVerify: true` for the spike, so the aggregator does not
+  need to trust that serving cert chain yet
 
-on the `APIService`, the backend still needs to speak TLS on the wire.
+Done when:
 
-Required next step:
-
-- add inbound TLS support to `cmd/server`
-- expose flags such as:
-  - `--tls-cert-file`
-  - `--tls-private-key-file`
-
-Possible but less-preferred spike fallback:
-
-- run a sidecar TLS terminator in front of the prototype and keep the Go server itself on HTTP
-
-The direct in-process TLS option is the cleaner next step.
+- the prototype binary can serve HTTPS using mounted cert/key files
+- the proxy can be placed behind `APIService` without failing immediately due to plain HTTP on an
+  HTTPS path
 
 ### 2. Caller authentication remains unresolved by design
 
@@ -58,48 +67,52 @@ for clarity:
 - without a `--client-ca-file` style check, the spike effectively trusts the cluster network path
   and service reachability
 
-Required follow-up:
+Decision for the first spike:
 
-- decide whether the first spike will:
-  - remain network-trust-only and document that clearly, or
-  - add optional client certificate verification via something like `--client-ca-file`
+- remain network-trust-only and document that clearly
+- defer `--client-ca-file` and aggregator client cert verification until after the first e2e path
+  is proven
 
-For the very first e2e spike, documented network trust is acceptable if called out plainly.
+Done when:
 
-### 3. Backend TLS needs an explicit story
+- the README and e2e hookup plan both state that delegated header trust is currently derived from
+  deployment topology / network path rather than verified aggregator client identity
+- no one reading the spike docs would assume `X-Remote-*` is cryptographically authenticated by the
+  prototype itself
 
-The real sample-apiserver currently serves HTTPS with its own certificate behavior. The prototype
-runtime plan already assumes:
+### 3. Backend TLS is now explicit
 
-- `--backend-url=https://...:443`
-
-But the backend trust behavior is not implemented yet.
-
-Required next step:
-
-- add one explicit backend TLS mode for the spike
-
-Most likely first option:
+The prototype now exposes an explicit backend HTTPS story instead of leaving it implicit:
 
 - `--backend-insecure-skip-verify`
-
-Better but slightly heavier option:
-
 - `--backend-ca-file`
-- optional `--backend-server-name`
+- `--backend-client-cert-file`
+- `--backend-client-key-file`
+- `--backend-server-name`
 
-The main point is to make this explicit in code and flags rather than implicit in docs.
+For the first cluster spike, `--backend-insecure-skip-verify` is still the expected shortest path
+because the sample-apiserver generates self-signed serving certs at startup.
 
-### 4. First usable container args should become real, not aspirational
+For the sample-apiserver e2e hookup specifically, backend client authentication also matters: the
+proxy is the immediate TLS caller to the real backend, so it may need its own client certificate in
+order for the backend to accept the forwarded request path.
 
-The current README lists likely-next flags. Those need to become actual implemented flags if the
-prototype is going to sit behind `APIService`.
+Done when:
+
+- the proxy can connect successfully to the sample-apiserver backend over HTTPS in e2e
+- the backend trust mode is visible in code and flags rather than being an unstated assumption
+
+### 4. Final flag surface checklist
+
+This is not a separate work item. It is the expected flag surface once items 1-3 above are landed.
 
 Minimum useful next argument set:
 
 - `--listen-address`
 - `--backend-url`
 - `--backend-insecure-skip-verify` or `--backend-ca-file`
+- `--backend-client-cert-file`
+- `--backend-client-key-file`
 - `--backend-server-name`
 - `--webhook-kubeconfig`
 - `--webhook-timeout`
@@ -112,18 +125,46 @@ Optional for the first spike:
 
 - `--client-ca-file`
 
-### 5. Keep the e2e scope narrow
+Test expectation for this work:
 
-Once the TLS pieces above are in place, the first useful e2e target should still stay small:
+- do not overbuild dedicated TLS unit tests for the spike
+- keep unit tests where they are already valuable at the package level
+- treat TLS wiring as primarily smoke-verified through the e2e hookup path once the flags exist
 
-- aggregated `create`
-- one successful request path
-- one proof that the downstream audit receiver gets:
-  - `objectRef.name`
-  - `requestObject`
-  - `responseObject`
+This can be revisited later if the TLS/configuration surface becomes more complex.
 
-Do not expand to broader semantics before that path works.
+### 5. Effective user attribution is proven, but impersonation fidelity still needs a decision
+
+The main project e2e now proves an important part of the end-to-end story:
+
+- an aggregated API request made with `kubectl --as=jane@acme.com` can still produce a Git commit
+  attributed to `jane@acme.com`
+
+That is the behavior GitOps Reverser needs most. But it does **not** automatically mean the
+prototype can promise a distinct upstream-style `impersonatedUser` field in every synthetic audit
+event.
+
+Current understanding:
+
+- the delegated requestheader path reliably gives the proxy the **effective** caller identity
+- that effective identity is sufficient for downstream author attribution
+- the original split between authenticated caller and impersonated caller may not always survive in
+  a way the prototype can reconstruct confidently
+
+For the prototype, that means we should document the current semantics clearly before treating
+impersonation fidelity as solved:
+
+- user attribution is based on the delegated effective identity
+- preserving a separate `impersonatedUser` field is still a follow-up decision, not a guaranteed
+  property of the spike
+
+Done when:
+
+- the README states that effective delegated identity is the current contract
+- the README does not imply that the prototype always preserves a separate
+  `audit.Event.impersonatedUser`
+- a future work session can tell, just by reading the prototype docs, whether impersonation support
+  means "correct final user attribution" or "full upstream field-by-field impersonation fidelity"
 
 ## Current Boundaries To Preserve
 
@@ -136,8 +177,8 @@ These are still intentionally out of scope for the prototype:
 
 ## Suggested Next Work Order
 
-1. Implement inbound TLS flags and server wiring.
-2. Implement backend TLS behavior for the real sample-apiserver path.
-3. Decide whether to add optional client CA verification now or document network trust for the
-   first spike.
-4. Then execute the e2e hookup plan in the main project docs.
+1. Use the new serving TLS flags in the proxy pod deployment and Secret mount wiring.
+2. Use `--backend-insecure-skip-verify` for the first sample-apiserver HTTPS spike unless backend
+   CA wiring is worth proving immediately.
+3. Keep delegated header trust explicitly network-based until `--client-ca-file` becomes necessary.
+4. Execute the e2e hookup plan in the main project docs.

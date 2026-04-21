@@ -142,7 +142,9 @@ func (h *Handler) serveAudited(w http.ResponseWriter, r *http.Request, info *req
 		http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
 		return
 	}
-	defer response.Body.Close()
+	defer func() {
+		_ = response.Body.Close()
+	}()
 
 	responseBody, err := spoolBody(response.Body, h.tempDir, h.captureMax)
 	if err != nil {
@@ -162,7 +164,9 @@ func (h *Handler) serveAudited(w http.ResponseWriter, r *http.Request, info *req
 		http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
 		return
 	}
-	defer responseReader.Close()
+	defer func() {
+		_ = responseReader.Close()
+	}()
 
 	copyHeaders(w.Header(), stripHopByHopHeaders(response.Header.Clone()))
 	w.WriteHeader(response.StatusCode)

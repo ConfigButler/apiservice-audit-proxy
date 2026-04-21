@@ -1,0 +1,77 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/configbutler/audit-pass-through-apiserver
+  pullPolicy: IfNotPresent
+  tag: 0.1.0
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+
+service:
+  type: ClusterIP
+  port: 9445
+
+listenAddress: ":9445"
+
+backend:
+  url: "https://sample-apiserver.wardle.svc:443"
+  insecureSkipVerify: true
+  caSecretName: ""
+  caFileName: ca.crt
+  clientCertSecretName: ""
+  clientCertFileName: tls.crt
+  clientKeyFileName: tls.key
+  serverName: ""
+
+webhook:
+  kubeconfigSecretName: audit-pass-through-webhook-kubeconfig
+  kubeconfigKey: kubeconfig
+  timeout: 5s
+
+audit:
+  maxBodyBytes: 1048576
+  captureTempDir: ""
+
+tls:
+  enabled: false
+  secretName: ""
+  certFileName: tls.crt
+  keyFileName: tls.key
+
+resources: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+extraArgs: []
+env: []
+volumes: []
+volumeMounts: []
+

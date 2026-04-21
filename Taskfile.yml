@@ -1,0 +1,112 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+version: "3"
+
+set:
+  - errexit
+  - nounset
+  - pipefail
+
+vars:
+  APP_NAME: audit-pass-through-apiserver
+  IMAGE_REPOSITORY: '{{.IMAGE_REPOSITORY | default "audit-pass-through-apiserver"}}'
+  IMAGE_TAG: '{{.IMAGE_TAG | default "dev"}}'
+  CHART_DIR: charts/audit-pass-through-apiserver
+  DIST_DIR: dist
+  RELEASE_NAME: '{{.RELEASE_NAME | default "audit-pass-through-apiserver"}}'
+  RELEASE_NAMESPACE: '{{.RELEASE_NAMESPACE | default "audit-pass-through-system"}}'
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+    silent: true
+
+  help:
+    desc: Display this help
+    aliases:
+      - list
+    cmds:
+      - task --list
+    silent: true
+
+  fmt:
+    desc: Format Go code
+    cmds:
+      - gofmt -w ./cmd ./pkg
+
+  fmt:check:
+    desc: Verify Go formatting without modifying files
+    cmds:
+      - |
+        files="$(gofmt -l ./cmd ./pkg)"
+        if [ -n "${files}" ]; then
+          echo "These files need gofmt:"
+          echo "${files}"
+          exit 1
+        fi
+
+  lint:
+    desc: Run golangci-lint
+    cmds:
+      - golangci-lint run
+
+  lint-fix:
+    desc: Run golangci-lint with auto-fix where available
+    cmds:
+      - golangci-lint run --fix
+
+  test:
+    desc: Run unit tests with coverage
+    cmds:
+      - go test ./... -coverprofile=coverage.out
+
+  build:
+    desc: Build the server binary
+    cmds:
+      - mkdir -p bin
+      - go build -o bin/{{.APP_NAME}} ./cmd/server
+
+  docker-build:
+    desc: Build the local container image
+    cmds:
+      - docker build -t {{.IMAGE_REPOSITORY}}:{{.IMAGE_TAG}} .
+
+  helm:lint:
+    desc: Lint the Helm chart
+    cmds:
+      - helm lint {{.CHART_DIR}}
+
+  helm:template:
+    desc: Render the Helm chart to stdout
+    cmds:
+      - helm template {{.RELEASE_NAME}} {{.CHART_DIR}} --namespace {{.RELEASE_NAMESPACE}}
+
+  helm:package:
+    desc: Package the Helm chart into dist/
+    cmds:
+      - mkdir -p {{.DIST_DIR}}
+      - helm package {{.CHART_DIR}} --destination {{.DIST_DIR}}
+
+  dist:
+    desc: Build release artifacts in dist/
+    cmds:
+      - mkdir -p {{.DIST_DIR}}
+      - helm template {{.RELEASE_NAME}} {{.CHART_DIR}} --namespace {{.RELEASE_NAMESPACE}} > {{.DIST_DIR}}/install.yaml
+      - task: helm:package
+      - |
+        if ls {{.DIST_DIR}}/*.tgz >/dev/null 2>&1; then
+          sha256sum {{.DIST_DIR}}/install.yaml {{.DIST_DIR}}/*.tgz > {{.DIST_DIR}}/checksums.txt
+        else
+          sha256sum {{.DIST_DIR}}/install.yaml > {{.DIST_DIR}}/checksums.txt
+        fi
+
+  ci:
+    desc: Run the local CI-equivalent checks
+    cmds:
+      - task: fmt:check
+      - task: lint
+      - task: test
+      - task: build
+      - task: helm:lint
+      - task: dist

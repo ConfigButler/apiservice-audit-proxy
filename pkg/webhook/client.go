@@ -28,7 +28,7 @@ type Client struct {
 
 // NewClientFromKubeconfig builds an HTTP client from a kubeconfig-style webhook
 // configuration, including mTLS and CA trust.
-func NewClientFromKubeconfig(path string, timeoutSeconds time.Duration) (*Client, error) {
+func NewClientFromKubeconfig(path string, timeout time.Duration) (*Client, error) {
 	restConfig, err := clientcmd.BuildConfigFromFlags("", path)
 	if err != nil {
 		return nil, fmt.Errorf("build rest config: %w", err)
@@ -47,7 +47,7 @@ func NewClientFromKubeconfig(path string, timeoutSeconds time.Duration) (*Client
 	return &Client{
 		endpoint: endpoint,
 		client: &http.Client{
-			Timeout:   timeoutSeconds,
+			Timeout:   timeout,
 			Transport: transport,
 		},
 	}, nil
@@ -70,7 +70,9 @@ func (c *Client) Send(ctx context.Context, eventList auditv1.EventList) error {
 	if err != nil {
 		return fmt.Errorf("post webhook payload: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
 		return nil
