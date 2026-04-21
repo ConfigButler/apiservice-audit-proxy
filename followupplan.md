@@ -5,21 +5,26 @@ bootstrap is in place.
 
 ## Primary Next Steps
 
-1. Replace the shell smoke flow with a Go e2e package under `test/e2e/`.
-   Run from the devcontainer with:
+1. Keep the Go e2e package under `test/e2e/` as the source of truth for smoke coverage.
+   The repo now runs smoke assertions from:
    ```bash
-   task e2e:prepare
+   task e2e:test-smoke
    ```
 
-2. Add a second certificate lane that verifies backend server CA validation instead of relying on
-   `backend.insecureSkipVerify=true`.
-   Start from:
-   - `test/e2e/setup/manifests/sample-apiserver/`
-   - `test/e2e/values/proxy-cert-manager.yaml`
+2. Keep the second certificate lane that verifies backend server CA validation instead of relying
+   on `backend.insecureSkipVerify=true`.
+   The repo now carries that path in:
+   - `test/e2e/setup/manifests/sample-apiserver-backend-ca/`
+   - `test/e2e/values/proxy-cert-manager-backend-ca.yaml`
+   and runs it with:
+   ```bash
+   task e2e:test-smoke-backend-ca
+   ```
 
-3. Add delegated requestheader trust validation with a real `--client-ca-file` implementation in
-   the proxy.
-   This is the biggest remaining security gap in the request identity story.
+3. Keep delegated requestheader trust validation wired through the proxy with
+   `--client-ca-file`.
+   The remaining work here is narrower now: document the trust model clearly and decide whether the
+   project ever needs additional upstream-style requestheader policy such as allowed client names.
 
 4. Extract the project into its own repository once image names, release names, and CI secrets are
    decided.
@@ -31,6 +36,8 @@ bootstrap is in place.
 
 ## Useful Repo-Local Improvements
 
+- Add a small doc note for local e2e environments where `k3d` bootstrap or kubeconfig merge is
+  flaky, so the recovery path is explicit for contributors.
 - Add `task e2e:test-smoke-dev-cert` for the fast `dev-self-signed` lane.
 - Add `task e2e:cluster-reset` to remove `.stamps/` and recreate the cluster from scratch.
 - Add a `test/e2e/values/proxy-existing-secret.yaml` example for advanced operators.

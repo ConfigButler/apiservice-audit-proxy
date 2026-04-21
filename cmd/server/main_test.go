@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -64,6 +65,15 @@ func TestParseFlags_Validation(t *testing.T) {
 				"--tls-private-key-file=/tmp/tls.key",
 			},
 			want: "--tls-cert-file and --tls-private-key-file must be provided together",
+		},
+		{
+			name: "client ca requires serving tls",
+			args: []string{
+				"--backend-url=http://backend.local",
+				"--webhook-kubeconfig=/tmp/webhook.kubeconfig",
+				"--client-ca-file=/tmp/client-ca.pem",
+			},
+			want: "--client-ca-file requires --tls-cert-file and --tls-private-key-file",
 		},
 		{
 			name: "only backend client cert",
@@ -256,6 +266,25 @@ func TestBuildBackendTransport_BackendClientCertificate_IsLoaded(t *testing.T) {
 	assert.NotEmpty(t, transport.TLSClientConfig.Certificates[0].Certificate)
 }
 
+func TestBuildServingTLSConfig_ClientCA_IsApplied(t *testing.T) {
+	t.Parallel()
+
+	caCertPEM, _, _ := writeSignedClientCertificate(t, "front-proxy-ca", "kube-aggregator")
+	caFile := filepath.Join(t.TempDir(), "client-ca.pem")
+	require.NoError(t, os.WriteFile(caFile, caCertPEM, 0o600))
+
+	tlsConfig, err := buildServingTLSConfig(config{
+		tlsCertFile:       "/tmp/tls.crt",
+		tlsPrivateKeyFile: "/tmp/tls.key",
+		clientCAFile:      caFile,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, tlsConfig)
+	assert.EqualValues(t, tls.VersionTLS12, tlsConfig.MinVersion)
+	assert.Equal(t, tls.VerifyClientCertIfGiven, tlsConfig.ClientAuth)
+	require.NotNil(t, tlsConfig.ClientCAs)
+}
+
 func writeBackendCertFile(t *testing.T, certDER []byte) string {
 	t.Helper()
 
@@ -272,13 +301,46 @@ func writeBackendCertFile(t *testing.T, certDER []byte) string {
 func writeClientKeyPair(t *testing.T) (string, string) {
 	t.Helper()
 
+	_, certPEM, keyPEM := writeSignedClientCertificate(t, "audit-pass-through-proxy-ca", "audit-pass-through-proxy")
+
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "client.crt")
+	keyPath := filepath.Join(dir, "client.key")
+
+	require.NoError(t, os.WriteFile(certPath, certPEM, 0o600))
+	require.NoError(t, os.WriteFile(keyPath, keyPEM, 0o600))
+
+	return certPath, keyPath
+}
+
+func writeSignedClientCertificate(t *testing.T, caCommonName, clientCommonName string) ([]byte, []byte, []byte) {
+	t.Helper()
+
+	caPrivateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+
+	caTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject: pkix.Name{
+			CommonName: caCommonName,
+		},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+	}
+
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caPrivateKey.PublicKey, caPrivateKey)
+	require.NoError(t, err)
+
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
 
 	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
+		SerialNumber: big.NewInt(2),
 		Subject: pkix.Name{
-			CommonName:   "audit-pass-through-proxy",
+			CommonName:   clientCommonName,
 			Organization: []string{"system:masters"},
 		},
 		NotBefore:             time.Now().Add(-time.Hour),
@@ -288,20 +350,19 @@ func writeClientKeyPair(t *testing.T) (string, string) {
 		BasicConstraintsValid: true,
 	}
 
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &privateKey.PublicKey, privateKey)
+	caCert, err := x509.ParseCertificate(caDER)
+	require.NoError(t, err)
+	certDER, err := x509.CreateCertificate(rand.Reader, template, caCert, &privateKey.PublicKey, caPrivateKey)
 	require.NoError(t, err)
 
-	dir := t.TempDir()
-	certPath := filepath.Join(dir, "client.crt")
-	keyPath := filepath.Join(dir, "client.key")
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
+	require.NotEmpty(t, caPEM)
 
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
 	require.NotEmpty(t, certPEM)
-	require.NoError(t, os.WriteFile(certPath, certPEM, 0o600))
 
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(privateKey)})
 	require.NotEmpty(t, keyPEM)
-	require.NoError(t, os.WriteFile(keyPath, keyPEM, 0o600))
 
-	return certPath, keyPath
+	return caPEM, certPEM, keyPEM
 }

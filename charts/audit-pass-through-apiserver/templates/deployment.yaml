@@ -57,6 +57,9 @@ spec:
             - --backend-client-cert-file={{ include "audit-pass-through-apiserver.paths.backendClient" . }}/{{ .Values.backend.clientCertFileName }}
             - --backend-client-key-file={{ include "audit-pass-through-apiserver.paths.backendClient" . }}/{{ .Values.backend.clientKeyFileName }}
             {{- end }}
+            {{- if .Values.requestHeader.clientCASecretName }}
+            - --client-ca-file={{ include "audit-pass-through-apiserver.paths.requestHeaderCA" . }}/{{ .Values.requestHeader.clientCAFileName }}
+            {{- end }}
             {{- with .Values.extraArgs }}
             {{- range . }}
             - {{ . | quote }}
@@ -101,6 +104,11 @@ spec:
               mountPath: {{ include "audit-pass-through-apiserver.paths.backendClient" . }}
               readOnly: true
             {{- end }}
+            {{- if .Values.requestHeader.clientCASecretName }}
+            - name: requestheader-client-ca
+              mountPath: {{ include "audit-pass-through-apiserver.paths.requestHeaderCA" . }}
+              readOnly: true
+            {{- end }}
             {{- with .Values.volumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -122,6 +130,11 @@ spec:
         - name: backend-client
           secret:
             secretName: {{ .Values.backend.clientCertSecretName }}
+        {{- end }}
+        {{- if .Values.requestHeader.clientCASecretName }}
+        - name: requestheader-client-ca
+          secret:
+            secretName: {{ .Values.requestHeader.clientCASecretName }}
         {{- end }}
         {{- with .Values.volumes }}
         {{- toYaml . | nindent 8 }}

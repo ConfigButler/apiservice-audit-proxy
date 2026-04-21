@@ -61,6 +61,10 @@ backend:
   clientKeyFileName: tls.key
   serverName: ""
 
+requestHeader:
+  clientCASecretName: ""
+  clientCAFileName: ca.crt
+
 webhook:
   kubeconfigSecretName: audit-pass-through-webhook-kubeconfig
   kubeconfigKey: kubeconfig

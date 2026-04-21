@@ -136,3 +136,4 @@ Standard volume paths.
 {{- define "audit-pass-through-apiserver.paths.tls" -}}/var/run/audit-pass-through/tls{{- end }}
 {{- define "audit-pass-through-apiserver.paths.backendCA" -}}/var/run/audit-pass-through/backend-ca{{- end }}
 {{- define "audit-pass-through-apiserver.paths.backendClient" -}}/var/run/audit-pass-through/backend-client{{- end }}
+{{- define "audit-pass-through-apiserver.paths.requestHeaderCA" -}}/var/run/audit-pass-through/requestheader-client-ca{{- end }}

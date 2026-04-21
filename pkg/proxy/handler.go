@@ -15,6 +15,7 @@ import (
 	auditevents "github.com/ConfigButler/audit-pass-through-apiserver/pkg/audit"
 	"github.com/ConfigButler/audit-pass-through-apiserver/pkg/identity"
 	"github.com/ConfigButler/audit-pass-through-apiserver/pkg/webhook"
+	authnv1 "k8s.io/api/authentication/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 	auditv1 "k8s.io/apiserver/pkg/apis/audit/v1"
 	requestinfo "k8s.io/apiserver/pkg/endpoints/request"
@@ -26,6 +27,7 @@ const asyncSendTimeout = 5 * time.Second
 type HandlerConfig struct {
 	BackendURL        *url.URL
 	WebhookClient     webhook.Sender
+	IdentityExtractor *identity.Extractor
 	Logger            *slog.Logger
 	Transport         http.RoundTripper
 	MaxAuditBodyBytes int64
@@ -37,6 +39,7 @@ type HandlerConfig struct {
 type Handler struct {
 	backendURL  *url.URL
 	webhook     webhook.Sender
+	identity    *identity.Extractor
 	logger      *slog.Logger
 	transport   http.RoundTripper
 	builder     *auditevents.Builder
@@ -64,6 +67,14 @@ func NewHandler(cfg HandlerConfig) (*Handler, error) {
 	if transport == nil {
 		transport = http.DefaultTransport
 	}
+	identityExtractor := cfg.IdentityExtractor
+	if identityExtractor == nil {
+		var err error
+		identityExtractor, err = identity.NewExtractor("")
+		if err != nil {
+			return nil, fmt.Errorf("build identity extractor: %w", err)
+		}
+	}
 
 	reverseProxy := httputil.NewSingleHostReverseProxy(cfg.BackendURL)
 	reverseProxy.Transport = transport
@@ -75,6 +86,7 @@ func NewHandler(cfg HandlerConfig) (*Handler, error) {
 	return &Handler{
 		backendURL: cfg.BackendURL,
 		webhook:    cfg.WebhookClient,
+		identity:   identityExtractor,
 		logger:     logger,
 		transport:  transport,
 		builder:    auditevents.NewBuilder(cfg.MaxAuditBodyBytes),
@@ -92,6 +104,18 @@ func NewHandler(cfg HandlerConfig) (*Handler, error) {
 // emits one best-effort ResponseComplete audit event after the proxied response
 // has been captured.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	userInfo, trustedIdentity, err := h.identity.FromRequest(r)
+	if err != nil {
+		h.logger.Warn("rejecting request with untrusted delegated identity", "error", err, "path", r.URL.Path)
+		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+		return
+	}
+	if h.identity.RequiresVerifiedHeaders() && !trustedIdentity {
+		h.logger.Warn("rejecting request without verified delegated identity", "path", r.URL.Path)
+		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+		return
+	}
+
 	info, err := h.resolver.NewRequestInfo(r)
 	if err != nil {
 		h.logger.Error("unable to resolve request info; using passthrough path", "error", err, "path", r.URL.Path)
@@ -103,10 +127,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.serveAudited(w, r, info)
+	h.serveAudited(w, r, info, userInfo)
 }
 
-func (h *Handler) serveAudited(w http.ResponseWriter, r *http.Request, info *requestinfo.RequestInfo) {
+func (h *Handler) serveAudited(w http.ResponseWriter, r *http.Request, info *requestinfo.RequestInfo, userInfo authnv1.UserInfo) {
 	requestReceivedAt := time.Now().UTC()
 
 	requestBody, err := spoolBody(r.Body, h.tempDir, h.captureMax)
@@ -177,7 +201,7 @@ func (h *Handler) serveAudited(w http.ResponseWriter, r *http.Request, info *req
 	event, err := h.builder.Build(auditevents.Input{
 		Request:               r,
 		RequestInfo:           info,
-		User:                  identity.FromHeaders(r.Header),
+		User:                  userInfo,
 		RequestBody:           requestBody.captured,
 		RequestBodyBytes:      requestBody.size,
 		RequestBodyTruncated:  requestBody.truncated,

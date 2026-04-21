@@ -27,6 +27,22 @@ Reasons:
 - e2e wiring benefits from having a stable chart and release artifact flow first
 - certificate UX is much easier to document and test once the packaging surface is settled
 
+## Current Repo Status
+
+The repository now has the first concrete slice of this step implemented:
+
+- the shell smoke path has been replaced by a Go e2e package under `test/e2e/`
+- the local task surface includes both `task e2e:test-smoke` and
+  `task e2e:test-smoke-backend-ca`
+- the proxy can verify delegated requestheader identity with `--client-ca-file`
+- the chart can mount a requestheader client CA Secret for that trust path
+
+That shifts the remaining Step 2 work away from basic feature wiring and toward:
+
+- stabilizing the live k3d execution environment
+- deciding how much of the e2e lane becomes CI-gated before extraction
+- finishing standalone-repo cutover details
+
 ## Desired End State
 
 At the end of Step 2, the project should support this story:

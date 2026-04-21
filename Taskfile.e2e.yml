@@ -40,6 +40,8 @@ vars:
   E2E_WEBHOOK_NAMESPACE: '{{.E2E_WEBHOOK_NAMESPACE | default "audit-pass-through-e2e"}}'
   E2E_WEBHOOK_SERVICE_NAME: '{{.E2E_WEBHOOK_SERVICE_NAME | default "audit-pass-through-mock-audit-webhook"}}'
   E2E_RELEASE_NAME: '{{.E2E_RELEASE_NAME | default "audit-pass-through-apiserver"}}'
+  E2E_BACKEND_MANIFEST_DIR: '{{.E2E_BACKEND_MANIFEST_DIR | default "test/e2e/setup/manifests/sample-apiserver"}}'
+  E2E_PROXY_VALUES_FILE: '{{.E2E_PROXY_VALUES_FILE | default "test/e2e/values/proxy-cert-manager.yaml"}}'
   FLUX_NAMESPACE: '{{.FLUX_NAMESPACE | default "flux-system"}}'
   FLUX_WAIT_TIMEOUT: '{{.FLUX_WAIT_TIMEOUT | default "600s"}}'
   STAMPS_DIR: .stamps/e2e/{{.CLUSTER_NAME}}
@@ -137,7 +139,7 @@ tasks:
     desc: Deploy the sample aggregated backend and its backend client cert wiring
     cmds:
       - task: e2e:flux-bootstrap
-      - "{{.KUBECTL}} --context {{.CTX}} apply -k test/e2e/setup/manifests/sample-apiserver"
+      - "{{.KUBECTL}} --context {{.CTX}} apply -k {{.E2E_BACKEND_MANIFEST_DIR}}"
       - "{{.KUBECTL}} --context {{.CTX}} -n {{.E2E_PROXY_NAMESPACE}} rollout status deploy/wardle-server --timeout=180s"
 
   e2e:prepare-webhook-kubeconfig:
@@ -153,17 +155,28 @@ tasks:
         export WEBHOOK_SERVICE_NAME="{{.E2E_WEBHOOK_SERVICE_NAME}}"
         bash hack/e2e/write-webhook-kubeconfig.sh
 
+  e2e:prepare-requestheader-client-ca:
+    desc: Copy the cluster requestheader client CA into the proxy namespace for secure delegated identity trust
+    cmds:
+      - task: e2e:deploy-backend
+      - "{{.KUBECTL}} --context {{.CTX}} create namespace {{.E2E_PROXY_NAMESPACE}} --dry-run=client -o yaml | {{.KUBECTL}} --context {{.CTX}} apply -f -"
+      - |
+        export CTX="{{.CTX}}"
+        export PROXY_NAMESPACE="{{.E2E_PROXY_NAMESPACE}}"
+        export SECRET_NAME="audit-pass-through-requestheader-client-ca"
+        bash hack/e2e/write-requestheader-client-ca.sh
+
   e2e:deploy-proxy:
     desc: Install the pass-through proxy with cert-manager-backed serving TLS
     cmds:
-      - task: e2e:deploy-backend
+      - task: e2e:prepare-requestheader-client-ca
       - task: e2e:prepare-webhook-kubeconfig
       - |
         {{.HELM}} upgrade --install {{.E2E_RELEASE_NAME}} ./charts/audit-pass-through-apiserver \
           --kube-context {{.CTX}} \
           --namespace {{.E2E_PROXY_NAMESPACE}} \
           --create-namespace \
-          --values test/e2e/values/proxy-cert-manager.yaml \
+          --values {{.E2E_PROXY_VALUES_FILE}} \
           --set image.repository={{.E2E_PROXY_IMAGE_REPOSITORY}} \
           --set image.tag={{.E2E_PROXY_IMAGE_TAG}}
       - "{{.KUBECTL}} --context {{.CTX}} -n {{.E2E_PROXY_NAMESPACE}} rollout status deploy/{{.E2E_RELEASE_NAME}} --timeout=180s"
@@ -178,14 +191,24 @@ tasks:
     desc: Run the standalone k3d smoke scenario against the aggregated API path
     cmds:
       - task: e2e:prepare
-      - |
-        export CTX="{{.CTX}}"
-        export WEBHOOK_NAMESPACE="{{.E2E_WEBHOOK_NAMESPACE}}"
-        export WEBHOOK_SERVICE_NAME="{{.E2E_WEBHOOK_SERVICE_NAME}}"
-        bash test/e2e/smoke.sh
+      - "CTX={{.CTX}} WEBHOOK_NAMESPACE={{.E2E_WEBHOOK_NAMESPACE}} WEBHOOK_SERVICE_NAME={{.E2E_WEBHOOK_SERVICE_NAME}} go test -tags=e2e -count=1 -v ./test/e2e"
+
+  e2e:prepare-backend-ca:
+    desc: Build, load, and install the smoke environment with backend server CA validation enabled
+    cmds:
+      - task: e2e:load-images
+      - task: e2e:deploy-proxy
+        vars:
+          E2E_BACKEND_MANIFEST_DIR: test/e2e/setup/manifests/sample-apiserver-backend-ca
+          E2E_PROXY_VALUES_FILE: test/e2e/values/proxy-cert-manager-backend-ca.yaml
+
+  e2e:test-smoke-backend-ca:
+    desc: Run the smoke scenario with backend TLS validated by an explicit CA bundle
+    cmds:
+      - task: e2e:prepare-backend-ca
+      - "CTX={{.CTX}} WEBHOOK_NAMESPACE={{.E2E_WEBHOOK_NAMESPACE}} WEBHOOK_SERVICE_NAME={{.E2E_WEBHOOK_SERVICE_NAME}} go test -tags=e2e -count=1 -v ./test/e2e"
 
   e2e:cluster-down:
     desc: Delete the standalone k3d cluster
     cmds:
       - "{{.K3D}} cluster delete {{.CLUSTER_NAME}}"
-

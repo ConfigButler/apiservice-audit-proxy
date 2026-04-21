@@ -13,7 +13,8 @@ apiService:
 
 backend:
   url: https://api-backend.wardle.svc.cluster.local:443
-  insecureSkipVerify: true
+  insecureSkipVerify: false
+  caSecretName: audit-pass-through-backend-serving-ca
   clientCertSecretName: audit-pass-through-backend-client-cert
   serverName: api-backend.wardle.svc.cluster.local
 

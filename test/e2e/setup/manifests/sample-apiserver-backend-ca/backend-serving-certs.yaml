@@ -1,0 +1,54 @@
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: audit-pass-through-backend-serving-selfsigned
+  namespace: wardle
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: audit-pass-through-backend-serving-ca
+  namespace: wardle
+spec:
+  commonName: audit-pass-through-backend-serving-ca
+  isCA: true
+  issuerRef:
+    kind: Issuer
+    name: audit-pass-through-backend-serving-selfsigned
+  privateKey:
+    algorithm: ECDSA
+    rotationPolicy: Always
+    size: 256
+  secretName: audit-pass-through-backend-serving-ca
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: audit-pass-through-backend-serving-ca-issuer
+  namespace: wardle
+spec:
+  ca:
+    secretName: audit-pass-through-backend-serving-ca
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: audit-pass-through-backend-serving-cert
+  namespace: wardle
+spec:
+  dnsNames:
+    - api-backend
+    - api-backend.wardle
+    - api-backend.wardle.svc
+    - api-backend.wardle.svc.cluster.local
+  issuerRef:
+    kind: Issuer
+    name: audit-pass-through-backend-serving-ca-issuer
+  privateKey:
+    rotationPolicy: Always
+  secretName: audit-pass-through-backend-serving-cert
+  usages:
+    - digital signature
+    - server auth

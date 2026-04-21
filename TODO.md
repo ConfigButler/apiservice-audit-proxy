@@ -27,9 +27,13 @@ The prototype now has the first runtime wiring needed for the e2e hookup:
   - `--backend-client-cert-file`
   - `--backend-client-key-file`
   - `--backend-server-name`
+- delegated requestheader trust verification via `--client-ca-file`
+- a Go e2e smoke package under `test/e2e/`
+- a second backend-CA e2e lane
 
-That means the remaining work is narrower now: document the trust model clearly, then wire the
-prototype into the main project's e2e environment.
+That means the remaining work is narrower now: keep the docs aligned with the implemented trust
+model, stabilize the local cluster story, and carry the prototype cleanly into standalone release
+and CI flows.
 
 ## Load-Bearing Remaining Work
 
@@ -51,7 +55,7 @@ Done when:
 - the proxy can be placed behind `APIService` without failing immediately due to plain HTTP on an
   HTTPS path
 
-### 2. Caller authentication remains unresolved by design
+### 2. Caller authentication is now verified, but the policy surface stays intentionally small
 
 The prototype currently extracts delegated identity from:
 
@@ -59,26 +63,20 @@ The prototype currently extracts delegated identity from:
 - `X-Remote-Group`
 - `X-Remote-Extra-*`
 
-but it does not verify the upstream aggregator client certificate before trusting those headers.
+and it can now verify the upstream front-proxy client certificate before trusting those headers
+when `--client-ca-file` is configured.
 
-This is aligned with the explicit non-goal that delegated header trust is not solved here. Still,
-for clarity:
+What remains intentionally out of scope:
 
-- without a `--client-ca-file` style check, the spike effectively trusts the cluster network path
-  and service reachability
-
-Decision for the first spike:
-
-- remain network-trust-only and document that clearly
-- defer `--client-ca-file` and aggregator client cert verification until after the first e2e path
-  is proven
+- reproducing every upstream kube-aggregator requestheader policy toggle
+- adding allowed client-name filtering before the project proves it needs that complexity
 
 Done when:
 
-- the README and e2e hookup plan both state that delegated header trust is currently derived from
-  deployment topology / network path rather than verified aggregator client identity
-- no one reading the spike docs would assume `X-Remote-*` is cryptographically authenticated by the
-  prototype itself
+- the README and e2e hookup plan both state that delegated header trust can be anchored in a
+  verified front-proxy CA bundle
+- the docs also state plainly that the requestheader trust model is still intentionally narrower
+  than a full kube-aggregator bootstrap
 
 ### 3. Backend TLS is now explicit
 
@@ -90,8 +88,10 @@ The prototype now exposes an explicit backend HTTPS story instead of leaving it 
 - `--backend-client-key-file`
 - `--backend-server-name`
 
-For the first cluster spike, `--backend-insecure-skip-verify` is still the expected shortest path
-because the sample-apiserver generates self-signed serving certs at startup.
+The repo now supports both:
+
+- the shorter `--backend-insecure-skip-verify` smoke lane
+- an explicit backend CA validation lane for the sample-apiserver
 
 For the sample-apiserver e2e hookup specifically, backend client authentication also matters: the
 proxy is the immediate TLS caller to the real backend, so it may need its own client certificate in
@@ -120,9 +120,6 @@ Minimum useful next argument set:
 - `--capture-temp-dir`
 - `--tls-cert-file`
 - `--tls-private-key-file`
-
-Optional for the first spike:
-
 - `--client-ca-file`
 
 Test expectation for this work:
@@ -173,12 +170,12 @@ These are still intentionally out of scope for the prototype:
 - duplicate suppression
 - generalized audit-policy behavior
 - production-grade retry/backpressure
-- solving delegated header trust beyond documented deployment assumptions
+- fully reproducing kube-aggregator requestheader policy beyond the documented CA-backed trust path
 
 ## Suggested Next Work Order
 
-1. Use the new serving TLS flags in the proxy pod deployment and Secret mount wiring.
-2. Use `--backend-insecure-skip-verify` for the first sample-apiserver HTTPS spike unless backend
-   CA wiring is worth proving immediately.
-3. Keep delegated header trust explicitly network-based until `--client-ca-file` becomes necessary.
-4. Execute the e2e hookup plan in the main project docs.
+1. Stabilize the live k3d/bootstrap path so the Go smoke lanes are easy to run in fresh
+   environments.
+2. Add the optional fast `dev-self-signed` smoke lane if the local feedback loop needs it.
+3. Decide whether standalone extraction happens before or after e2e becomes a CI gate.
+4. Execute the remaining e2e hookup and extraction work in the main project docs.

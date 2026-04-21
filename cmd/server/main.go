@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ConfigButler/audit-pass-through-apiserver/pkg/identity"
 	auditproxy "github.com/ConfigButler/audit-pass-through-apiserver/pkg/proxy"
 	"github.com/ConfigButler/audit-pass-through-apiserver/pkg/webhook"
 )
@@ -39,6 +40,7 @@ type config struct {
 	backendClientCertFile     string
 	backendClientKeyFile      string
 	backendServerName         string
+	clientCAFile              string
 	webhookKubeconfig         string
 	webhookTimeout            time.Duration
 	maxAuditBodyBytes         int64
@@ -67,6 +69,11 @@ func main() {
 		logger.Error("unable to configure backend transport", "error", err)
 		os.Exit(1)
 	}
+	identityExtractor, err := identity.NewExtractor(cfg.clientCAFile)
+	if err != nil {
+		logger.Error("unable to initialize requestheader identity extractor", "error", err)
+		os.Exit(1)
+	}
 
 	webhookClient, err := webhook.NewClientFromKubeconfig(cfg.webhookKubeconfig, cfg.webhookTimeout)
 	if err != nil {
@@ -77,6 +84,7 @@ func main() {
 	handler, err := auditproxy.NewHandler(auditproxy.HandlerConfig{
 		BackendURL:        backendURL,
 		WebhookClient:     webhookClient,
+		IdentityExtractor: identityExtractor,
 		Logger:            logger.With("component", "proxy"),
 		Transport:         backendTransport,
 		MaxAuditBodyBytes: cfg.maxAuditBodyBytes,
@@ -99,8 +107,10 @@ func main() {
 		WriteTimeout: defaultWriteTimeout,
 		IdleTimeout:  defaultIdleTimeout,
 	}
-	if cfg.tlsCertFile != "" {
-		server.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	server.TLSConfig, err = buildServingTLSConfig(cfg)
+	if err != nil {
+		logger.Error("unable to configure serving TLS", "error", err)
+		os.Exit(1)
 	}
 
 	logger.Info(
@@ -112,6 +122,7 @@ func main() {
 		"backend_client_cert_file", cfg.backendClientCertFile,
 		"backend_client_key_file", cfg.backendClientKeyFile,
 		"backend_server_name", cfg.backendServerName,
+		"client_ca_file", cfg.clientCAFile,
 		"webhook_kubeconfig", cfg.webhookKubeconfig,
 		"max_audit_body_bytes", cfg.maxAuditBodyBytes,
 		"capture_temp_dir", cfg.captureTempDir,
@@ -175,6 +186,12 @@ func parseFlags(args []string, stderr io.Writer) (config, error) {
 		"backend-server-name",
 		"",
 		"Optional TLS server name override for HTTPS backend verification.",
+	)
+	fs.StringVar(
+		&cfg.clientCAFile,
+		"client-ca-file",
+		"",
+		"PEM bundle used to verify the front-proxy client certificate before trusting delegated X-Remote-* headers.",
 	)
 	fs.StringVar(
 		&cfg.webhookKubeconfig,
@@ -247,10 +264,33 @@ func validateServingTLSFlags(cfg config) error {
 	hasCert := cfg.tlsCertFile != ""
 	hasKey := cfg.tlsPrivateKeyFile != ""
 	if hasCert == hasKey {
+		if cfg.clientCAFile != "" && !hasCert {
+			return fmt.Errorf("--client-ca-file requires --tls-cert-file and --tls-private-key-file")
+		}
 		return nil
 	}
 
 	return fmt.Errorf("--tls-cert-file and --tls-private-key-file must be provided together")
+}
+
+func buildServingTLSConfig(cfg config) (*tls.Config, error) {
+	if cfg.tlsCertFile == "" {
+		return nil, nil
+	}
+
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+	if cfg.clientCAFile == "" {
+		return tlsConfig, nil
+	}
+
+	clientCAs, err := loadStaticCertPool(cfg.clientCAFile, "client CA")
+	if err != nil {
+		return nil, err
+	}
+
+	tlsConfig.ClientAuth = tls.VerifyClientCertIfGiven
+	tlsConfig.ClientCAs = clientCAs
+	return tlsConfig, nil
 }
 
 func validateBackendClientTLSFlags(cfg config) error {
@@ -328,18 +368,32 @@ func loadKeyPair(certPath, keyPath string) (tls.Certificate, error) {
 	return certificate, nil
 }
 
-func loadCertPool(path string) (*x509.CertPool, error) {
+func loadStaticCertPool(path, bundleName string) (*x509.CertPool, error) {
 	pemBytes, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
-		return nil, fmt.Errorf("read backend CA file: %w", err)
+		return nil, fmt.Errorf("read %s file: %w", bundleName, err)
 	}
 
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(pemBytes) {
+		return nil, fmt.Errorf("parse %s file: no certificates found", bundleName)
+	}
+
+	return pool, nil
+}
+
+func loadCertPool(path string) (*x509.CertPool, error) {
 	rootCAs, err := x509.SystemCertPool()
 	if err != nil {
 		return nil, fmt.Errorf("load system cert pool: %w", err)
 	}
 	if rootCAs == nil {
 		rootCAs = x509.NewCertPool()
+	}
+
+	pemBytes, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		return nil, fmt.Errorf("read backend CA file: %w", err)
 	}
 	if !rootCAs.AppendCertsFromPEM(pemBytes) {
 		return nil, fmt.Errorf("parse backend CA file: no certificates found")
