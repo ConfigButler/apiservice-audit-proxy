@@ -1,7 +1,6 @@
 # APIService proxy prototype that allows you to get more complete ResponseComplete audit events
 
-This directory now contains the first implementation slice for the pass-through aggregated API
-server described in [PLAN.md](./PLAN.md).
+This directory contains a small pass-through aggregated API server.
 
 ## What It Does
 
@@ -12,8 +11,8 @@ server described in [PLAN.md](./PLAN.md).
 - wraps that event in an `EventList`
 - POSTs that `EventList` to a kubeconfig-configured audit webhook endpoint
 
-This matches the event shape and webhook body shape described in [PLAN.md](./PLAN.md) and
-motivated in [WHY.md](./WHY.md).
+See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for the current design and
+[WHY.md](./WHY.md) for the upstream rationale.
 
 ## Explicit Non-Goals
 
@@ -280,6 +279,10 @@ The small prototype testset lives in:
 - `pkg/proxy`: end-to-end proxying, best-effort webhook behavior, and hop-by-hop header stripping
 - `cmd/mock-audit-webhook`: in-memory receiver behavior used by the local smoke flow
 
-## Follow-Up
+## Docs
 
-The next slice after this bootstrap lives in [followupplan.md](./followupplan.md).
+Current living docs:
+
+- [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)
+- [docs/TODO.md](./docs/TODO.md)
+- [WHY.md](./WHY.md)
