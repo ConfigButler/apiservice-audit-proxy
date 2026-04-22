@@ -4,8 +4,8 @@ description: >-
   An aggregated API pass-through proxy that emits richer audit.k8s.io/v1
   ResponseComplete events for supported mutating requests
 type: application
-version: 0.1.0
-appVersion: 0.1.0
+version: 0.1.1
+appVersion: 0.1.1
 keywords:
   - kubernetes
   - audit
@@ -21,4 +21,3 @@ maintainers:
 annotations:
   org.opencontainers.image.source: https://github.com/ConfigButler/apiservice-audit-proxy
   org.opencontainers.image.description: Audit pass-through aggregated API server
-

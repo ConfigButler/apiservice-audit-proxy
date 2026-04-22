@@ -3,7 +3,7 @@ replicaCount: 1
 image:
   repository: ghcr.io/configbutler/apiservice-audit-proxy
   pullPolicy: IfNotPresent
-  tag: 0.1.0 # x-release-please-version
+  tag: 0.1.1 # x-release-please-version
 
 imagePullSecrets: []
 nameOverride: ""
