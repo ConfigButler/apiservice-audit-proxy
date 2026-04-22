@@ -229,21 +229,16 @@ jobs:
         run: |
           echo "name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:ci-${{ github.sha }}" >> $GITHUB_OUTPUT
 
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v4
+      - name: Build and push application image
+        uses: ./.github/actions/docker-build
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push application image
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          push: true
+          platforms: linux/amd64
           tags: ${{ steps.image.outputs.name }}
-          cache-from: type=gha,scope=${{ env.IMAGE_CACHE_SCOPE }}
-          cache-to: type=gha,mode=max,scope=${{ env.IMAGE_CACHE_SCOPE }}
+          outputs: type=image,push=true
+          cache-scope: ${{ env.IMAGE_CACHE_SCOPE }}
 
   e2e-taskfile:
     name: E2E Taskfile Validation
