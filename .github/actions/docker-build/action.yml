@@ -10,21 +10,38 @@ inputs:
   password:
     description: 'Registry password'
     required: true
-  platforms:
-    description: 'Target platforms (e.g., linux/amd64)'
+  cache-scope:
+    description: 'GHA cache scope (used for both cache-from and cache-to)'
     required: true
+  platforms:
+    description: 'Target platforms (e.g. linux/amd64); defaults to host platform if omitted'
+    required: false
+  file:
+    description: 'Path to Dockerfile; defaults to Dockerfile in the build context'
+    required: false
+  target:
+    description: 'Build target stage'
+    required: false
   tags:
     description: 'Image tags'
     required: false
   labels:
     description: 'Image labels'
     required: false
+  push:
+    description: 'Push the built image to the registry'
+    required: false
+    default: 'false'
+  load:
+    description: 'Load the built image into the local Docker daemon (single-platform only)'
+    required: false
+    default: 'false'
   outputs:
-    description: 'Build outputs (e.g., type=image,push=true or type=image,name=...,push-by-digest=true)'
-    required: true
-  cache-scope:
-    description: 'Cache scope name'
-    required: true
+    description: 'Build outputs (e.g. type=image,push-by-digest=true for digest-only release builds)'
+    required: false
+  cache-from-extra:
+    description: 'Additional cache-from entry (full type=gha,scope=... string) for reading shared layers'
+    required: false
 outputs:
   digest:
     description: 'Image digest'
@@ -47,10 +64,15 @@ runs:
       uses: docker/build-push-action@v7
       with:
         context: .
+        file: ${{ inputs.file }}
+        target: ${{ inputs.target }}
         platforms: ${{ inputs.platforms }}
-        push: true
+        push: ${{ inputs.push }}
+        load: ${{ inputs.load }}
         tags: ${{ inputs.tags }}
         labels: ${{ inputs.labels }}
-        cache-from: type=gha,scope=${{ inputs.cache-scope }}
+        cache-from: |
+          type=gha,scope=${{ inputs.cache-scope }}
+          ${{ inputs.cache-from-extra }}
         cache-to: type=gha,mode=max,scope=${{ inputs.cache-scope }}
         outputs: ${{ inputs.outputs }}
