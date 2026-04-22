@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/ConfigButler/apiservice-audit-proxy/compare/apiservice-audit-proxy-v0.2.0...apiservice-audit-proxy-v0.2.1) (2026-04-22)
+
+
+### Bug Fixes
+
+* env context is not permitted in jobs ([6585398](https://github.com/ConfigButler/apiservice-audit-proxy/commit/6585398cb1b137e8d6f1b83612aae74058c35df4))
+
 ## [0.2.0](https://github.com/ConfigButler/apiservice-audit-proxy/compare/apiservice-audit-proxy-v0.1.1...apiservice-audit-proxy-v0.2.0) (2026-04-22)
 
 
