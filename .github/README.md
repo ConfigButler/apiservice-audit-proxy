@@ -7,16 +7,13 @@ The pipeline is defined in [workflows/ci.yml](workflows/ci.yml). It runs on ever
 ## Job dependency graph
 
 ```
-build-ci-container ──┬── validate-devcontainer
-                     ├── lint ─────────────────────────────────┐
-                     ├── test ─────────────────────────────────┤
-                     ├── build ────────────────────────────────┤── e2e-smoke ──┐
-                     ├── lint-helm ───────────────────────────┤               │
-                     └── docker-build ───────────────────────┘               │
-                                                                   release-please (main only)
-                                                                        ├── publish (amd64) ──┐
-                                                                        ├── publish (arm64) ──┤── publish-manifest
-                                                                        └── publish-helm
+build-ci-container ──┬── validate-devcontainer ──────────────┐
+                     ├── lint ─────────────────────────────────┤
+                     ├── test ─────────────────────────────────┤── release-please (main only)
+                     ├── build ────────────────────────────────┤       ├── publish (amd64) ──┐
+                     ├── lint-helm ────────────────────────────┤       ├── publish (arm64) ──┴── publish-manifest
+                     ├── e2e-taskfile ───────────────────────── ┤       └── publish-helm
+                     └── docker-build ── e2e-smoke ────────────┘
 ```
 
 ## Design: build once, run everywhere
@@ -40,7 +37,8 @@ GHA layer caching (`type=gha`) is also maintained alongside the registry push to
 | `build` | Yes | Compiles the server binary via `task build` |
 | `lint-helm` | Yes | Lints the Helm chart and packages it (`dist/`) via `task helm:lint` + `task dist`; uploads `dist/` as an artifact |
 | `docker-build` | No | Builds the application container image in parallel with lint/test (cache-only, not pushed) to validate the `Dockerfile` independently |
-| `e2e-smoke` | No (host runner) | Installs kubectl, Helm, Task, Flux, and k3d on the runner, then runs a full k3d-based smoke test via `task e2e:test-smoke`; gates on all quality jobs |
+| `e2e-taskfile` | No (CI image via `docker run`) | Validates Taskfile build behaviour: runs `task e2e:test-taskfile` inside the CI container (DooD); checks that `e2e:build-image` rebuilds on Go source changes and is a no-op for externally-provided images |
+| `e2e-smoke` | No (host runner, CI image via `docker run`) | Pulls the CI container and the application image built by `docker-build`, then runs `task e2e:test-smoke` inside the CI container (DooD: Docker socket + workspace mounted); runs in parallel with lint/test |
 | `release-please` | No | On `main` push only: runs `googleapis/release-please-action` to maintain a release PR; merging that PR creates a Git tag and GitHub release |
 | `publish` (matrix) | No | When a release is created: builds each platform image (`linux/amd64` on ubuntu-latest, `linux/arm64` on ubuntu-24.04-arm) and uploads its digest |
 | `publish-manifest` | No | Merges the per-platform digests into a multi-arch manifest list; appends installation instructions and platform list to the GitHub release body |

@@ -85,7 +85,9 @@ tasks:
         {{.KUBECTL}} --context {{.CTX}} apply -k test/e2e/setup/manifests
 
   e2e:build-image:
-    desc: Build the proxy image used for local e2e
+    desc: Build the proxy image used for local e2e (no-op when E2E_PROXY_IMAGE is externally provided)
+    status:
+      - '[ "{{.E2E_PROXY_IMAGE}}" != "apiservice-audit-proxy:e2e-local" ]'
     cmds:
       - "{{.DOCKER}} build -t {{.E2E_PROXY_IMAGE}} ."
 
@@ -192,6 +194,11 @@ tasks:
     cmds:
       - task: e2e:load-images
       - task: e2e:deploy-proxy
+
+  e2e:test-taskfile:
+    desc: Validate Taskfile build behavior (no cluster required; needs Docker)
+    cmds:
+      - go test -tags=e2e -run 'TestBuildImageTask' -count=1 -v ./test/e2e
 
   e2e:test-smoke:
     desc: Run the standalone k3d smoke scenario against the aggregated API path
