@@ -204,7 +204,7 @@ tasks:
     desc: Run the standalone k3d smoke scenario against the aggregated API path
     cmds:
       - task: e2e:prepare
-      - "CTX={{.CTX}} WEBHOOK_NAMESPACE={{.E2E_WEBHOOK_NAMESPACE}} WEBHOOK_SERVICE_NAME={{.E2E_WEBHOOK_SERVICE_NAME}} go test -tags=e2e -count=1 -v ./test/e2e"
+      - "CTX={{.CTX}} WEBHOOK_NAMESPACE={{.E2E_WEBHOOK_NAMESPACE}} WEBHOOK_SERVICE_NAME={{.E2E_WEBHOOK_SERVICE_NAME}} go test -tags=e2e -run 'TestSmoke' -count=1 -v ./test/e2e"
 
   e2e:prepare-backend-ca:
     desc: Build, load, and install the smoke environment with backend server CA validation enabled
@@ -219,7 +219,18 @@ tasks:
     desc: Run the smoke scenario with backend TLS validated by an explicit CA bundle
     cmds:
       - task: e2e:prepare-backend-ca
-      - "CTX={{.CTX}} WEBHOOK_NAMESPACE={{.E2E_WEBHOOK_NAMESPACE}} WEBHOOK_SERVICE_NAME={{.E2E_WEBHOOK_SERVICE_NAME}} go test -tags=e2e -count=1 -v ./test/e2e"
+      - "CTX={{.CTX}} WEBHOOK_NAMESPACE={{.E2E_WEBHOOK_NAMESPACE}} WEBHOOK_SERVICE_NAME={{.E2E_WEBHOOK_SERVICE_NAME}} go test -tags=e2e -run 'TestSmoke' -count=1 -v ./test/e2e"
+
+  e2e:test-image-refresh:
+    desc: Validate image load → pod digest chain (cluster required; runs after smoke)
+    cmds:
+      - "CTX={{.CTX}} E2E_PROXY_NAMESPACE={{.E2E_PROXY_NAMESPACE}} go test -tags=e2e -run 'TestImageRefresh' -count=1 -v ./test/e2e"
+
+  e2e:test-smoke-full:
+    desc: Run the full e2e suite in order (smoke first, then image-refresh)
+    cmds:
+      - task: e2e:test-smoke
+      - task: e2e:test-image-refresh
 
   e2e:cluster-down:
     desc: Delete the standalone k3d cluster
