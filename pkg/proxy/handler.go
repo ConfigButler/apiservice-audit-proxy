@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,13 +13,14 @@ import (
 	"strings"
 	"time"
 
-	auditevents "github.com/ConfigButler/apiservice-audit-proxy/pkg/audit"
-	"github.com/ConfigButler/apiservice-audit-proxy/pkg/identity"
-	"github.com/ConfigButler/apiservice-audit-proxy/pkg/webhook"
 	authnv1 "k8s.io/api/authentication/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 	auditv1 "k8s.io/apiserver/pkg/apis/audit/v1"
 	requestinfo "k8s.io/apiserver/pkg/endpoints/request"
+
+	auditevents "github.com/ConfigButler/apiservice-audit-proxy/pkg/audit"
+	"github.com/ConfigButler/apiservice-audit-proxy/pkg/identity"
+	"github.com/ConfigButler/apiservice-audit-proxy/pkg/webhook"
 )
 
 const asyncSendTimeout = 5 * time.Second
@@ -52,10 +54,10 @@ type Handler struct {
 // NewHandler creates a new proxy handler.
 func NewHandler(cfg HandlerConfig) (*Handler, error) {
 	if cfg.BackendURL == nil {
-		return nil, fmt.Errorf("backend URL is required")
+		return nil, errors.New("backend URL is required")
 	}
 	if cfg.WebhookClient == nil {
-		return nil, fmt.Errorf("webhook client is required")
+		return nil, errors.New("webhook client is required")
 	}
 
 	logger := cfg.Logger
@@ -130,7 +132,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.serveAudited(w, r, info, userInfo)
 }
 
-func (h *Handler) serveAudited(w http.ResponseWriter, r *http.Request, info *requestinfo.RequestInfo, userInfo authnv1.UserInfo) {
+func (h *Handler) serveAudited(
+	w http.ResponseWriter,
+	r *http.Request,
+	info *requestinfo.RequestInfo,
+	userInfo authnv1.UserInfo,
+) {
 	requestReceivedAt := time.Now().UTC()
 
 	requestBody, err := spoolBody(r.Body, h.tempDir, h.captureMax)
@@ -152,13 +159,7 @@ func (h *Handler) serveAudited(w http.ResponseWriter, r *http.Request, info *req
 		return
 	}
 
-	upstreamRequest, err := h.buildUpstreamRequest(r, upstreamBody, requestBody.size)
-	if err != nil {
-		h.logger.Error("unable to build upstream request", "error", err, "path", r.URL.Path)
-		_ = upstreamBody.Close()
-		http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
-		return
-	}
+	upstreamRequest := h.buildUpstreamRequest(r, upstreamBody, requestBody.size)
 
 	response, err := h.transport.RoundTrip(upstreamRequest)
 	if err != nil {
@@ -198,6 +199,17 @@ func (h *Handler) serveAudited(w http.ResponseWriter, r *http.Request, info *req
 		h.logger.Error("unable to write proxied response", "error", err, "path", r.URL.Path)
 	}
 
+	go h.buildAndSendAuditEvent(r, info, userInfo, requestBody, responseBody, response.StatusCode, requestReceivedAt)
+}
+
+func (h *Handler) buildAndSendAuditEvent(
+	r *http.Request,
+	info *requestinfo.RequestInfo,
+	userInfo authnv1.UserInfo,
+	requestBody, responseBody *spooledBody,
+	statusCode int,
+	requestReceivedAt time.Time,
+) {
 	event, err := h.builder.Build(auditevents.Input{
 		Request:               r,
 		RequestInfo:           info,
@@ -208,7 +220,7 @@ func (h *Handler) serveAudited(w http.ResponseWriter, r *http.Request, info *req
 		ResponseBody:          responseBody.captured,
 		ResponseBodyBytes:     responseBody.size,
 		ResponseBodyTruncated: responseBody.truncated,
-		ResponseStatusCode:    response.StatusCode,
+		ResponseStatusCode:    statusCode,
 		RequestReceivedAt:     requestReceivedAt,
 		ResponseCompletedAt:   time.Now().UTC(),
 	})
@@ -217,7 +229,7 @@ func (h *Handler) serveAudited(w http.ResponseWriter, r *http.Request, info *req
 		return
 	}
 
-	go h.sendBestEffort(*event, r.URL.Path)
+	h.sendBestEffort(*event, r.URL.Path)
 }
 
 func (h *Handler) sendBestEffort(event auditv1.Event, path string) {
@@ -229,7 +241,11 @@ func (h *Handler) sendBestEffort(event auditv1.Event, path string) {
 	}
 }
 
-func (h *Handler) buildUpstreamRequest(r *http.Request, body io.ReadCloser, contentLength int64) (*http.Request, error) {
+func (h *Handler) buildUpstreamRequest(
+	r *http.Request,
+	body io.ReadCloser,
+	contentLength int64,
+) *http.Request {
 	upstreamURL := h.backendURL.ResolveReference(&url.URL{
 		Path:     r.URL.Path,
 		RawPath:  r.URL.RawPath,
@@ -245,7 +261,7 @@ func (h *Handler) buildUpstreamRequest(r *http.Request, body io.ReadCloser, cont
 	upstreamRequest.Header = stripHopByHopHeaders(upstreamRequest.Header.Clone())
 	appendForwardedFor(upstreamRequest.Header, r.RemoteAddr)
 
-	return upstreamRequest, nil
+	return upstreamRequest
 }
 
 func shouldAudit(info *requestinfo.RequestInfo) bool {
@@ -269,21 +285,23 @@ func copyHeaders(dst, src http.Header) {
 	}
 }
 
-var hopByHopHeaders = []string{
-	"Connection",
-	"Proxy-Connection",
-	"Keep-Alive",
-	"Proxy-Authenticate",
-	"Proxy-Authorization",
-	"Te",
-	"Trailer",
-	"Transfer-Encoding",
-	"Upgrade",
+func hopByHop() []string {
+	return []string{
+		"Connection",
+		"Proxy-Connection",
+		"Keep-Alive",
+		"Proxy-Authenticate",
+		"Proxy-Authorization",
+		"Te",
+		"Trailer",
+		"Transfer-Encoding",
+		"Upgrade",
+	}
 }
 
 func stripHopByHopHeaders(header http.Header) http.Header {
 	connectionValues := append([]string(nil), header.Values("Connection")...)
-	for _, key := range hopByHopHeaders {
+	for _, key := range hopByHop() {
 		header.Del(key)
 	}
 

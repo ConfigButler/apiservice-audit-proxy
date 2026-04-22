@@ -151,9 +151,11 @@ func (c kubectlClient) run(ctx context.Context, args ...string) string {
 	c.t.Helper()
 
 	cmd := c.command(ctx, args...)
-	output, err := cmd.CombinedOutput()
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	output, err := cmd.Output()
 	if err != nil {
-		c.t.Fatalf("%s %s failed: %v\n%s", c.kubectl, strings.Join(args, " "), err, string(output))
+		c.t.Fatalf("%s %s failed: %v\n%s\n%s", c.kubectl, strings.Join(args, " "), err, string(output), stderr.String())
 	}
 
 	return string(output)

@@ -43,7 +43,7 @@ vars:
   E2E_BACKEND_MANIFEST_DIR: '{{.E2E_BACKEND_MANIFEST_DIR | default "test/e2e/setup/manifests/sample-apiserver"}}'
   E2E_PROXY_VALUES_FILE: '{{.E2E_PROXY_VALUES_FILE | default "test/e2e/values/proxy-cert-manager.yaml"}}'
   FLUX_NAMESPACE: '{{.FLUX_NAMESPACE | default "flux-system"}}'
-  FLUX_WAIT_TIMEOUT: '{{.FLUX_WAIT_TIMEOUT | default "600s"}}'
+  FLUX_WAIT_TIMEOUT: '{{.FLUX_WAIT_TIMEOUT | default "900s"}}'
   STAMPS_DIR: .stamps/e2e/{{.CLUSTER_NAME}}
 
 tasks:
@@ -77,6 +77,12 @@ tasks:
         export CTX="{{.CTX}}"
         export FLUX_SERVICES_WAIT_TIMEOUT="{{.FLUX_WAIT_TIMEOUT}}"
         bash hack/e2e/wait-flux-resources.sh
+      - |
+        {{.KUBECTL}} --context {{.CTX}} wait --for=condition=Established \
+          crd/prometheuses.monitoring.coreos.com \
+          crd/servicemonitors.monitoring.coreos.com \
+          --timeout=180s
+        {{.KUBECTL}} --context {{.CTX}} apply -k test/e2e/setup/manifests
 
   e2e:build-image:
     desc: Build the proxy image used for local e2e

@@ -110,7 +110,13 @@ func writeClientCAFixture(t *testing.T, caCommonName, clientCommonName string) (
 	caCert, err := x509.ParseCertificate(caDER)
 	require.NoError(t, err)
 
-	clientDER, err := x509.CreateCertificate(rand.Reader, clientTemplate, caCert, &clientPrivateKey.PublicKey, caPrivateKey)
+	clientDER, err := x509.CreateCertificate(
+		rand.Reader,
+		clientTemplate,
+		caCert,
+		&clientPrivateKey.PublicKey,
+		caPrivateKey,
+	)
 	require.NoError(t, err)
 
 	caFile := filepath.Join(t.TempDir(), "client-ca.pem")

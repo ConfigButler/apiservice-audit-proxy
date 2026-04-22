@@ -15,6 +15,8 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
+const maxErrorResponseBody = 4096
+
 // Sender posts audit EventList payloads to a webhook backend.
 type Sender interface {
 	Send(context.Context, auditv1.EventList) error
@@ -78,6 +80,6 @@ func (c *Client) Send(ctx context.Context, eventList auditv1.EventList) error {
 		return nil
 	}
 
-	responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorResponseBody))
 	return fmt.Errorf("webhook responded with %s: %s", resp.Status, string(responseBody))
 }

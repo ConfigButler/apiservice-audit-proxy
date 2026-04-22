@@ -30,6 +30,8 @@ const (
 	defaultShutdownTimeout  = 10 * time.Second
 	defaultWebhookTimeout   = 5 * time.Second
 	defaultMaxAuditBodySize = int64(1024 * 1024)
+
+	exitCodeUsage = 2
 )
 
 type config struct {
@@ -55,7 +57,7 @@ func main() {
 	cfg, err := parseFlags(os.Args[1:], os.Stderr)
 	if err != nil {
 		logger.Error("invalid flags", "error", err)
-		os.Exit(2)
+		os.Exit(exitCodeUsage)
 	}
 
 	backendURL, err := url.Parse(cfg.backendURL)
@@ -146,7 +148,7 @@ func main() {
 
 	if err := serve(server, cfg); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("server exited with error", "error", err)
-		os.Exit(1)
+		os.Exit(1) //nolint:gocritic // exitAfterDefer: stop() not running on os.Exit is acceptable in main
 	}
 }
 
@@ -225,15 +227,15 @@ func parseFlags(args []string, stderr io.Writer) (config, error) {
 
 	if cfg.backendURL == "" {
 		fs.Usage()
-		return config{}, fmt.Errorf("--backend-url is required")
+		return config{}, errors.New("--backend-url is required")
 	}
 	if cfg.webhookKubeconfig == "" {
 		fs.Usage()
-		return config{}, fmt.Errorf("--webhook-kubeconfig is required")
+		return config{}, errors.New("--webhook-kubeconfig is required")
 	}
 	if cfg.maxAuditBodyBytes <= 0 {
 		fs.Usage()
-		return config{}, fmt.Errorf("--max-audit-body-bytes must be greater than zero")
+		return config{}, errors.New("--max-audit-body-bytes must be greater than zero")
 	}
 	if err := validateServingTLSFlags(cfg); err != nil {
 		fs.Usage()
@@ -265,17 +267,17 @@ func validateServingTLSFlags(cfg config) error {
 	hasKey := cfg.tlsPrivateKeyFile != ""
 	if hasCert == hasKey {
 		if cfg.clientCAFile != "" && !hasCert {
-			return fmt.Errorf("--client-ca-file requires --tls-cert-file and --tls-private-key-file")
+			return errors.New("--client-ca-file requires --tls-cert-file and --tls-private-key-file")
 		}
 		return nil
 	}
 
-	return fmt.Errorf("--tls-cert-file and --tls-private-key-file must be provided together")
+	return errors.New("--tls-cert-file and --tls-private-key-file must be provided together")
 }
 
 func buildServingTLSConfig(cfg config) (*tls.Config, error) {
 	if cfg.tlsCertFile == "" {
-		return nil, nil
+		return nil, nil //nolint:nilnil // nil config signals plain-HTTP mode; not an error
 	}
 
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
@@ -300,7 +302,7 @@ func validateBackendClientTLSFlags(cfg config) error {
 		return nil
 	}
 
-	return fmt.Errorf("--backend-client-cert-file and --backend-client-key-file must be provided together")
+	return errors.New("--backend-client-cert-file and --backend-client-key-file must be provided together")
 }
 
 func buildBackendTransport(backendURL *url.URL, cfg config) (*http.Transport, error) {
@@ -311,7 +313,7 @@ func buildBackendTransport(backendURL *url.URL, cfg config) (*http.Transport, er
 
 	transport := baseTransport.Clone()
 	if backendURL == nil {
-		return nil, fmt.Errorf("backend URL is required")
+		return nil, errors.New("backend URL is required")
 	}
 	if backendURL.Scheme != "http" && backendURL.Scheme != "https" {
 		return nil, fmt.Errorf("unsupported --backend-url scheme %q", backendURL.Scheme)
@@ -320,17 +322,17 @@ func buildBackendTransport(backendURL *url.URL, cfg config) (*http.Transport, er
 	if backendURL.Scheme != "https" {
 		if cfg.backendInsecureSkipVerify || cfg.backendCAFile != "" || cfg.backendServerName != "" ||
 			cfg.backendClientCertFile != "" || cfg.backendClientKeyFile != "" {
-			return nil, fmt.Errorf("backend TLS flags require an https --backend-url")
+			return nil, errors.New("backend TLS flags require an https --backend-url")
 		}
 
 		return transport, nil
 	}
 
 	if cfg.backendInsecureSkipVerify && cfg.backendCAFile != "" {
-		return nil, fmt.Errorf("--backend-insecure-skip-verify and --backend-ca-file are mutually exclusive")
+		return nil, errors.New("--backend-insecure-skip-verify and --backend-ca-file are mutually exclusive")
 	}
 	if !cfg.backendInsecureSkipVerify && cfg.backendCAFile == "" {
-		return nil, fmt.Errorf("https --backend-url requires --backend-insecure-skip-verify or --backend-ca-file")
+		return nil, errors.New("https --backend-url requires --backend-insecure-skip-verify or --backend-ca-file")
 	}
 
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
@@ -396,7 +398,7 @@ func loadCertPool(path string) (*x509.CertPool, error) {
 		return nil, fmt.Errorf("read backend CA file: %w", err)
 	}
 	if !rootCAs.AppendCertsFromPEM(pemBytes) {
-		return nil, fmt.Errorf("parse backend CA file: no certificates found")
+		return nil, errors.New("parse backend CA file: no certificates found")
 	}
 
 	return rootCAs, nil

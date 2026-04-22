@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -9,13 +10,6 @@ import (
 	"k8s.io/apiserver/pkg/authentication/authenticator"
 	"k8s.io/apiserver/pkg/authentication/request/headerrequest"
 	x509request "k8s.io/apiserver/pkg/authentication/request/x509"
-)
-
-var (
-	standardNameHeaders         = headerrequest.StaticStringSlice([]string{"X-Remote-User"})
-	standardUIDHeaders          = headerrequest.StaticStringSlice([]string{"X-Remote-Uid"})
-	standardGroupHeaders        = headerrequest.StaticStringSlice([]string{"X-Remote-Group"})
-	standardExtraHeaderPrefixes = headerrequest.StaticStringSlice([]string{"X-Remote-Extra-"})
 )
 
 // Extractor resolves delegated requestheader identity from an inbound request.
@@ -41,12 +35,17 @@ func NewExtractor(clientCAFile string) (*Extractor, error) {
 }
 
 func newAuthenticator(clientCAFile string) (authenticator.Request, error) {
+	nameHeaders := headerrequest.StaticStringSlice([]string{"X-Remote-User"})
+	uidHeaders := headerrequest.StaticStringSlice([]string{"X-Remote-Uid"})
+	groupHeaders := headerrequest.StaticStringSlice([]string{"X-Remote-Group"})
+	extraPrefixes := headerrequest.StaticStringSlice([]string{"X-Remote-Extra-"})
+
 	if clientCAFile == "" {
 		return headerrequest.New(
-			standardNameHeaders.Value(),
-			standardUIDHeaders.Value(),
-			standardGroupHeaders.Value(),
-			standardExtraHeaderPrefixes.Value(),
+			nameHeaders.Value(),
+			uidHeaders.Value(),
+			groupHeaders.Value(),
+			extraPrefixes.Value(),
 		)
 	}
 
@@ -55,16 +54,16 @@ func newAuthenticator(clientCAFile string) (authenticator.Request, error) {
 		return nil, fmt.Errorf("load requestheader client CA file: %w", err)
 	}
 	if verifyOptionsFn == nil {
-		return nil, fmt.Errorf("requestheader client CA verifier is not configured")
+		return nil, errors.New("requestheader client CA verifier is not configured")
 	}
 
 	return headerrequest.NewDynamicVerifyOptionsSecure(
 		verifyOptionsFn,
 		headerrequest.StaticStringSlice(nil),
-		standardNameHeaders,
-		standardUIDHeaders,
-		standardGroupHeaders,
-		standardExtraHeaderPrefixes,
+		nameHeaders,
+		uidHeaders,
+		groupHeaders,
+		extraPrefixes,
 	), nil
 }
 

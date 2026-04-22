@@ -45,7 +45,12 @@ func TestHandleWebhook_StoresPayloadAndServesItBack(t *testing.T) {
 	body, err := json.Marshal(payload)
 	require.NoError(t, err)
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, server.URL+"/audit-webhook/test", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		server.URL+"/audit-webhook/test",
+		bytes.NewReader(body),
+	)
 	require.NoError(t, err)
 
 	resp, err := http.DefaultClient.Do(req)

@@ -43,7 +43,8 @@
     "source=gomodcache,target=/go/pkg/mod,type=volume",
     "source=gobuildcache,target=/home/vscode/.cache/go-build,type=volume",
     "source=auditproxycodexconfig,target=/home/vscode/.codex,type=volume",
-    "source=auditproxyclaudeconfig,target=/home/vscode/.claude,type=volume"
+    "source=auditproxyclaudeconfig,target=/home/vscode/.claude,type=volume",
+    "source=auditproxydotkube,target=/home/vscode/.kube,type=volume"
   ],
   "containerEnv": {
     "GIT_USER_NAME": "${localEnv:GIT_USER_NAME}",

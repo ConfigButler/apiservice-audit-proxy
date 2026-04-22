@@ -46,7 +46,7 @@ spec:
         service:
           enabled: true
         serviceMonitor:
-          enabled: true
+          enabled: false
     logs:
       access:
         enabled: true

@@ -2,6 +2,7 @@ package audit
 
 import (
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -17,15 +18,19 @@ import (
 func TestBuilder_BuildResponseCompleteEvent(t *testing.T) {
 	t.Parallel()
 
-	requestBody := []byte(`{"apiVersion":"wardle.example.com/v1alpha1","kind":"Flunder","metadata":{"name":"audit-probe","namespace":"default"},"spec":{"reference":"alpha"}}`)
-	responseBody := []byte(`{"apiVersion":"wardle.example.com/v1alpha1","kind":"Flunder","metadata":{"name":"audit-probe","namespace":"default","uid":"uid-123","resourceVersion":"7"},"spec":{"reference":"alpha"}}`)
+	requestBody := []byte(
+		`{"apiVersion":"wardle.example.com/v1alpha1","kind":"Flunder","metadata":{"name":"audit-probe","namespace":"default"},"spec":{"reference":"alpha"}}`,
+	)
+	responseBody := []byte(
+		`{"apiVersion":"wardle.example.com/v1alpha1","kind":"Flunder","metadata":{"name":"audit-probe","namespace":"default","uid":"uid-123","resourceVersion":"7"},"spec":{"reference":"alpha"}}`,
+	)
 
 	req := httptest.NewRequest(
-		"POST",
+		http.MethodPost,
 		"http://proxy.local/apis/wardle.example.com/v1alpha1/namespaces/default/flunders?fieldManager=kubectl",
 		nil,
 	)
-	req.Header.Set("Audit-ID", "audit-123")
+	req.Header.Set("Audit-Id", "audit-123")
 	req.Header.Set("User-Agent", "kubectl/v1.33.0")
 	req.RemoteAddr = "10.0.0.5:12345"
 
@@ -62,7 +67,7 @@ func TestBuilder_TruncatedBodies_UsePlaceholderAndAnnotations(t *testing.T) {
 	t.Parallel()
 
 	req := httptest.NewRequest(
-		"PATCH",
+		http.MethodPatch,
 		"http://proxy.local/apis/wardle.example.com/v1alpha1/namespaces/default/flunders/audit-probe",
 		nil,
 	)

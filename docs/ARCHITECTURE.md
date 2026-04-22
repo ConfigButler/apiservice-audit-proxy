@@ -144,12 +144,47 @@ There are three independent trust relationships:
 - `pkg/webhook`: outbound audit webhook client
 - `cmd/mock-audit-webhook`: local test receiver used by e2e
 
+## Component Diagram
+
+The diagram below shows the four key components and how they connect during the
+local e2e smoke test. Solid arrows are synchronous calls; the dashed arrow is
+the best-effort audit webhook POST that happens after the proxied response has
+already been returned.
+
+```mermaid
+flowchart TD
+    client["kubectl / e2e test"]
+
+    subgraph kube["Kubernetes API Server"]
+        apiserver["kube-apiserver\n(APIService: v1alpha1.wardle.example.com)"]
+    end
+
+    subgraph wardle["namespace: wardle"]
+        proxy["apiservice-audit-proxy\n(port 9445 → Service :443)"]
+        backend["wardle-server\nsample aggregated API\n+ etcd sidecar"]
+    end
+
+    subgraph e2ens["namespace: audit-pass-through-e2e"]
+        webhook["mock-audit-webhook\nGET /events  POST /sink"]
+    end
+
+    client -->|"kubectl create / get flunder"| apiserver
+    apiserver -->|"front-proxy request\n(X-Remote-User headers)"| proxy
+    proxy -->|"forwarded request\n(mTLS optional)"| backend
+    backend -->|"response"| proxy
+    proxy -.->|"best-effort\naudit EventList POST\n(after response returned)"| webhook
+    proxy -->|"proxied response"| apiserver
+    apiserver -->|"response"| client
+
+    client -->|"port-forward → GET /events\nassert requestObject present"| webhook
+```
+
 ## Local E2E Shape
 
 The local smoke flow is centered on a narrow but realistic path:
 
-- k3d cluster
-- Flux bootstrap
+- k3d cluster with 1 server + 3 agents
+- Flux bootstrap (cert-manager, traefik, reflector, prometheus-operator)
 - cert-manager-backed proxy serving TLS
 - Wardle sample-apiserver backend
 - mock audit webhook receiver

@@ -21,10 +21,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ConfigButler/apiservice-audit-proxy/pkg/identity"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	auditv1 "k8s.io/apiserver/pkg/apis/audit/v1"
+
+	"github.com/ConfigButler/apiservice-audit-proxy/pkg/identity"
 )
 
 func TestHandler_MutatingRequest_ProxiesAndEmitsEvent(t *testing.T) {
@@ -36,7 +37,7 @@ func TestHandler_MutatingRequest_ProxiesAndEmitsEvent(t *testing.T) {
 	backendRequests := make(chan *http.Request, 1)
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
+		assert.NoError(t, err)
 		assert.JSONEq(t, requestBody, string(body))
 
 		backendRequests <- r.Clone(context.Background())
@@ -65,7 +66,7 @@ func TestHandler_MutatingRequest_ProxiesAndEmitsEvent(t *testing.T) {
 		strings.NewReader(requestBody),
 	)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Audit-ID", "audit-123")
+	req.Header.Set("Audit-Id", "audit-123")
 	req.Header.Set("X-Remote-User", "alice")
 	req.Header.Set("X-Remote-Group", "devs")
 	req.RemoteAddr = "10.0.0.5:12345"
@@ -245,7 +246,7 @@ func TestHandler_RequiresVerifiedDelegatedIdentity_WhenClientCAConfigured(t *tes
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
-	defer backend.Close()
+	t.Cleanup(backend.Close)
 
 	backendURL, err := url.Parse(backend.URL)
 	require.NoError(t, err)
@@ -264,6 +265,7 @@ func TestHandler_RequiresVerifiedDelegatedIdentity_WhenClientCAConfigured(t *tes
 	require.NoError(t, err)
 
 	t.Run("missing client certificate", func(t *testing.T) {
+		t.Parallel()
 		req := httptest.NewRequest(
 			http.MethodGet,
 			"http://proxy.local/apis/wardle.example.com/v1alpha1/namespaces/default/flunders",
@@ -277,6 +279,7 @@ func TestHandler_RequiresVerifiedDelegatedIdentity_WhenClientCAConfigured(t *tes
 	})
 
 	t.Run("valid client certificate", func(t *testing.T) {
+		t.Parallel()
 		req := httptest.NewRequest(
 			http.MethodGet,
 			"http://proxy.local/apis/wardle.example.com/v1alpha1/namespaces/default/flunders",
@@ -341,7 +344,13 @@ func writeRequestHeaderClientCAFixture(t *testing.T) (string, *x509.Certificate)
 	caCert, err := x509.ParseCertificate(caDER)
 	require.NoError(t, err)
 
-	clientDER, err := x509.CreateCertificate(rand.Reader, clientTemplate, caCert, &clientPrivateKey.PublicKey, caPrivateKey)
+	clientDER, err := x509.CreateCertificate(
+		rand.Reader,
+		clientTemplate,
+		caCert,
+		&clientPrivateKey.PublicKey,
+		caPrivateKey,
+	)
 	require.NoError(t, err)
 
 	caFile := filepath.Join(t.TempDir(), "client-ca.pem")

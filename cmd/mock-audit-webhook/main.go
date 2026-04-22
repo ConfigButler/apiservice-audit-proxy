@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -24,6 +24,9 @@ const (
 	defaultWriteTimeout      = 30 * time.Second
 	defaultIdleTimeout       = 60 * time.Second
 	defaultShutdownTimeout   = 10 * time.Second
+
+	exitCodeUsage  = 2
+	maxWebhookBody = 10 * 1024 * 1024
 )
 
 type config struct {
@@ -79,7 +82,7 @@ func main() {
 	cfg, err := parseFlags(os.Args[1:], os.Stderr)
 	if err != nil {
 		logger.Error("invalid flags", "error", err)
-		os.Exit(2)
+		os.Exit(exitCodeUsage)
 	}
 
 	store := newEventStore(cfg.maxStored)
@@ -119,7 +122,7 @@ func main() {
 
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		logger.Error("server exited with error", "error", err)
-		os.Exit(1)
+		os.Exit(1) //nolint:gocritic // exitAfterDefer: stop() not running on os.Exit is acceptable in main
 	}
 }
 
@@ -129,12 +132,17 @@ func parseFlags(args []string, stderr io.Writer) (config, error) {
 	fs := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.StringVar(&cfg.listenAddress, "listen-address", defaultMockListenAddress, "Address for the mock audit webhook.")
-	fs.IntVar(&cfg.maxStored, "max-stored-events", defaultMaxStoredEvents, "Maximum number of webhook payloads kept in memory.")
+	fs.IntVar(
+		&cfg.maxStored,
+		"max-stored-events",
+		defaultMaxStoredEvents,
+		"Maximum number of webhook payloads kept in memory.",
+	)
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
 	if cfg.maxStored <= 0 {
-		return config{}, fmt.Errorf("--max-stored-events must be greater than zero")
+		return config{}, errors.New("--max-stored-events must be greater than zero")
 	}
 
 	return cfg, nil
@@ -172,7 +180,7 @@ func handleWebhook(store *eventStore, logger *slog.Logger) http.HandlerFunc {
 			return
 		}
 
-		body, err := io.ReadAll(io.LimitReader(r.Body, 10*1024*1024))
+		body, err := io.ReadAll(io.LimitReader(r.Body, maxWebhookBody))
 		if err != nil {
 			http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
 			return

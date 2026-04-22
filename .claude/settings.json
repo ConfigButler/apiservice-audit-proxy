@@ -3,7 +3,22 @@
     "allow": [
       "Bash(k3d cluster *)",
       "Bash(task e2e:test-smoke)",
-      "Bash(kubectl --context k3d-audit-pass-through-e2e get nodes)"
+      "Bash(kubectl *)",
+      "Read(//home/vscode/.config/k3d/**)",
+      "Bash(KUBECONFIG=/home/vscode/.config/k3d/kubeconfig-audit-pass-through-e2e.yaml kubectl get nodes)",
+      "Bash(getent hosts *)",
+      "Bash(docker port *)",
+      "Bash(KUBECONFIG=/home/vscode/.config/k3d/kubeconfig-audit-pass-through-e2e.yaml kubectl config set-cluster k3d-audit-pass-through-e2e --server=https://host.docker.internal:6551 --tls-server-name=localhost)",
+      "Bash(docker network *)",
+      "Bash(docker exec *)",
+      "Bash(sort -t/ -k4 -n)",
+      "Bash(read p *)",
+      "Bash(grep -v \"^$\")",
+      "Bash(ulimit -n)",
+      "Read(//proc/sys/fs/**)",
+      "Bash(sudo sysctl *)",
+      "Bash(docker run *)",
+      "Bash(task ci *)"
     ]
   }
 }

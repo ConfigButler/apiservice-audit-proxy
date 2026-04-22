@@ -3,7 +3,10 @@ kind: Kustomization
 
 resources:
   - namespaces/cert-manager.yaml
+  - namespaces/prometheus-operator.yaml
   - repositories/jetstack.yaml
+  - repositories/prometheus-operator.yaml
   - releases/cert-manager.yaml
   - releases/ingress.yaml
+  - releases/prometheus-operator.yaml
   - releases/reflector.yaml

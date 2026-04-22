@@ -3,7 +3,7 @@ package audit
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"net"
 	"net/http"
 	"strings"
@@ -14,12 +14,13 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/uuid"
-	"k8s.io/apiserver/pkg/apis/audit/v1"
+	v1 "k8s.io/apiserver/pkg/apis/audit/v1"
 	requestinfo "k8s.io/apiserver/pkg/endpoints/request"
 )
 
 const (
 	truncationAnnotationPrefix = "audit-pass-through.configbutler.io/"
+	sourceIPPrealloc           = 4
 )
 
 // Input carries the request and response details needed to build one
@@ -53,10 +54,10 @@ func NewBuilder(maxBodyBytes int64) *Builder {
 // Build returns a single audit.k8s.io/v1 ResponseComplete event.
 func (b *Builder) Build(input Input) (*v1.Event, error) {
 	if input.Request == nil {
-		return nil, fmt.Errorf("request is required")
+		return nil, errors.New("request is required")
 	}
 	if input.RequestInfo == nil {
-		return nil, fmt.Errorf("request info is required")
+		return nil, errors.New("request info is required")
 	}
 
 	requestMeta := decodeObjectMeta(input.RequestBody)
@@ -133,7 +134,7 @@ func (b *Builder) auditIDFromRequest(req *http.Request) types.UID {
 		return types.UID(value)
 	}
 
-	return types.UID(uuid.NewUUID())
+	return uuid.NewUUID()
 }
 
 func (b *Builder) buildUnknown(body []byte, originalSize int64, truncated bool) (*runtime.Unknown, bool) {
@@ -163,7 +164,8 @@ func (b *Builder) buildUnknown(body []byte, originalSize int64, truncated bool) 
 
 func buildResponseStatus(code int, body []byte) *metav1.Status {
 	var status metav1.Status
-	if len(bytes.TrimSpace(body)) > 0 && json.Unmarshal(body, &status) == nil && strings.EqualFold(status.Kind, "Status") {
+	if len(bytes.TrimSpace(body)) > 0 && json.Unmarshal(body, &status) == nil &&
+		strings.EqualFold(status.Kind, "Status") {
 		if status.APIVersion == "" {
 			status.APIVersion = "v1"
 		}
@@ -171,7 +173,7 @@ func buildResponseStatus(code int, body []byte) *metav1.Status {
 			status.Kind = "Status"
 		}
 		if status.Code == 0 {
-			status.Code = int32(code)
+			status.Code = int32(code) //nolint:gosec
 		}
 
 		return &status
@@ -182,7 +184,7 @@ func buildResponseStatus(code int, body []byte) *metav1.Status {
 			APIVersion: "v1",
 			Kind:       "Status",
 		},
-		Code: int32(code),
+		Code: int32(code), //nolint:gosec
 	}
 	if code >= http.StatusOK && code < http.StatusBadRequest {
 		result.Status = metav1.StatusSuccess
@@ -256,7 +258,7 @@ func firstNonEmpty(values ...string) string {
 
 func collectSourceIPs(req *http.Request) []string {
 	seen := map[string]struct{}{}
-	ips := make([]string, 0, 4)
+	ips := make([]string, 0, sourceIPPrealloc)
 
 	appendIP := func(value string) {
 		value = strings.TrimSpace(value)

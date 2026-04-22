@@ -38,7 +38,7 @@ spec:
             - --backend-url={{ required "backend.url is required" .Values.backend.url }}
             - --webhook-kubeconfig={{ include "apiservice-audit-proxy.paths.webhook" . }}/{{ .Values.webhook.kubeconfigKey }}
             - --webhook-timeout={{ .Values.webhook.timeout }}
-            - --max-audit-body-bytes={{ .Values.audit.maxBodyBytes }}
+            - --max-audit-body-bytes={{ .Values.audit.maxBodyBytes | int }}
             {{- if .Values.backend.insecureSkipVerify }}
             - --backend-insecure-skip-verify
             {{- end }}
