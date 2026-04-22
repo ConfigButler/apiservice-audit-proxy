@@ -346,7 +346,7 @@ jobs:
     if: needs.release-please.outputs.release_created == 'true'
     uses: configbutler/.github/.github/workflows/multi-arch-publish.yml@main
     with:
-      image-name: ${{ env.IMAGE_NAME }}
+      image-name: configbutler/apiservice-audit-proxy
       version: ${{ needs.release-please.outputs.version }}
       tag-name: ${{ needs.release-please.outputs.tag_name }}
       release-notes: |
