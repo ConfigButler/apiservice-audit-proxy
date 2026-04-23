@@ -15,3 +15,29 @@ Example:
     --set backend.url=https://sample-apiserver.wardle.svc:443 \
     --set webhook.kubeconfigSecretName=audit-pass-through-webhook-kubeconfig \
     --set certificates.mode=dev-self-signed
+{{- if .Values.webhookTester.enabled }}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Webhook Tester — side-by-side audit demo:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Port-forward the webhook-tester UI:
+
+  kubectl port-forward \
+    -n {{ .Release.Namespace }} \
+    svc/{{ include "apiservice-audit-proxy.webhookTester.fullname" . }} \
+    8080:{{ .Values.webhookTester.service.port }}
+
+Then open two browser tabs:
+
+  Lane A — kube-apiserver native audit (silent for aggregated API calls):
+    http://localhost:8080/{{ .Values.webhookTester.kubeApiserverSessionUUID }}
+
+  Lane B — proxy audit (shows events for aggregated API calls):
+    http://localhost:8080/{{ .Values.webhookTester.proxySessionUUID }}
+
+Make a request to the aggregated API and watch Lane B light up while Lane A
+stays silent. That contrast is what this tool provides.
+
+New events appear automatically as they arrive. No refresh needed.
+{{- end }}

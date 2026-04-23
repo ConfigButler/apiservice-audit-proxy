@@ -1,0 +1,44 @@
+apiVersion: audit.k8s.io/v1
+kind: Policy
+omitStages:
+  - "RequestReceived"
+rules:
+  # -----------------------------------------------------------
+  # 1. NOISE FILTER (Level: None)
+  # -----------------------------------------------------------
+  - level: None
+    resources:
+      - group: ""
+        resources: ["events", "endpoints", "nodes", "pods", "bindings", "componentstatuses", "*/status"]
+      - group: "authentication.k8s.io"
+        resources: ["tokenreviews"]
+      - group: "authorization.k8s.io"
+        resources: ["subjectaccessreviews", "selfsubjectaccessreviews", "localsubjectaccessreviews", "selfsubjectrulesreviews"]
+      - group: "coordination.k8s.io"
+        resources: ["leases"]
+      - group: "apps"
+        resources: ["*/status"]
+      - group: "networking.k8s.io"
+        resources: ["*/status"]
+
+  # -----------------------------------------------------------
+  # 3. HPA NOISE FILTER (Level: None)
+  # -----------------------------------------------------------
+  - level: None
+    users: ["system:serviceaccount:kube-system:horizontal-pod-autoscaler"]
+    verbs: ["update", "patch"]
+    resources:
+      - group: "apps"
+        resources: ["*/scale"]
+
+  # -----------------------------------------------------------
+  # 4. INTENT CAPTURE (Level: RequestResponse)
+  # -----------------------------------------------------------
+  - level: RequestResponse
+    omitManagedFields: true
+    verbs:
+      - create
+      - update
+      - patch
+      - delete
+      - deletecollection

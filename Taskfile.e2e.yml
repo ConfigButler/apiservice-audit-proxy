@@ -232,6 +232,34 @@ tasks:
       - task: e2e:test-smoke
       - task: e2e:test-image-refresh
 
+  e2e:deploy-with-webhook-tester:
+    desc: Deploy the proxy Helm chart with webhookTester.enabled=true (demo/audit-gap mode)
+    cmds:
+      - task: e2e:prepare-requestheader-client-ca
+      - |
+        {{.HELM}} upgrade --install {{.E2E_RELEASE_NAME}} ./charts/apiservice-audit-proxy \
+          --kube-context {{.CTX}} \
+          --namespace {{.E2E_PROXY_NAMESPACE}} \
+          --create-namespace \
+          --values {{.E2E_PROXY_VALUES_FILE}} \
+          --set image.repository={{.E2E_PROXY_IMAGE_REPOSITORY}} \
+          --set image.tag={{.E2E_PROXY_IMAGE_TAG}} \
+          --set webhookTester.enabled=true
+      - "{{.KUBECTL}} --context {{.CTX}} -n {{.E2E_PROXY_NAMESPACE}} rollout status deploy/{{.E2E_RELEASE_NAME}} --timeout=180s"
+      - "{{.KUBECTL}} --context {{.CTX}} -n {{.E2E_PROXY_NAMESPACE}} rollout status deploy/{{.E2E_RELEASE_NAME}}-webhook-tester --timeout=180s"
+
+  e2e:test-audit-gap:
+    desc: |
+      Assert the audit gap for aggregated API requests.
+      Lane A (kube-apiserver native) must have a hollow event; Lane B (proxy) must have the full event.
+      Requires: cluster created with audit webhook baked in + webhookTester.enabled=true.
+    cmds:
+      - task: e2e:load-image
+      - task: e2e:deploy-with-webhook-tester
+      - |
+        CTX={{.CTX}} WEBHOOK_TESTER_NAMESPACE={{.E2E_PROXY_NAMESPACE}} \
+          go test -tags=e2e -run 'TestAggregatedAPIAuditGap' -count=1 -v ./test/e2e
+
   e2e:cluster-down:
     desc: Delete the standalone k3d cluster
     cmds:

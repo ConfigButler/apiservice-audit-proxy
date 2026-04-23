@@ -130,6 +130,34 @@ false
 {{- end }}
 
 {{/*
+webhook-tester resource name (deployment, service, ingress, secret).
+*/}}
+{{- define "apiservice-audit-proxy.webhookTester.fullname" -}}
+{{- printf "%s-webhook-tester" (include "apiservice-audit-proxy.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+webhook-tester selector labels.
+*/}}
+{{- define "apiservice-audit-proxy.webhookTester.selectorLabels" -}}
+app.kubernetes.io/name: webhook-tester
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: webhook-tester
+{{- end }}
+
+{{/*
+webhook-tester common labels.
+*/}}
+{{- define "apiservice-audit-proxy.webhookTester.labels" -}}
+helm.sh/chart: {{ include "apiservice-audit-proxy.chart" . }}
+{{ include "apiservice-audit-proxy.webhookTester.selectorLabels" . }}
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
+
+{{/*
 Standard volume paths.
 */}}
 {{- define "apiservice-audit-proxy.paths.webhook" -}}/var/run/audit-pass-through/webhook{{- end }}

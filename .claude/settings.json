@@ -18,7 +18,11 @@
       "Read(//proc/sys/fs/**)",
       "Bash(sudo sysctl *)",
       "Bash(docker run *)",
-      "Bash(task ci *)"
+      "Bash(task ci *)",
+      "Read(//go/pkg/mod/k8s.io/apiserver@v0.35.3/pkg/apis/audit/v1/**)",
+      "Read(//go/pkg/mod/k8s.io/apimachinery@v0.35.3/pkg/runtime/**)",
+      "Bash(go build *)",
+      "Bash(go test *)"
     ]
   }
 }

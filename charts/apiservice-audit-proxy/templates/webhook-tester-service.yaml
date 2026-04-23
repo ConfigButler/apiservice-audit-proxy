@@ -1,0 +1,18 @@
+{{- if .Values.webhookTester.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "apiservice-audit-proxy.webhookTester.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "apiservice-audit-proxy.webhookTester.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.webhookTester.service.type }}
+  selector:
+    {{- include "apiservice-audit-proxy.webhookTester.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.webhookTester.service.port }}
+      targetPort: http
+      protocol: TCP
+{{- end }}

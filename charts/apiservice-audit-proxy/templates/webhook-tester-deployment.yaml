@@ -1,0 +1,57 @@
+{{- if .Values.webhookTester.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "apiservice-audit-proxy.webhookTester.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "apiservice-audit-proxy.webhookTester.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.webhookTester.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "apiservice-audit-proxy.webhookTester.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "apiservice-audit-proxy.webhookTester.selectorLabels" . | nindent 8 }}
+      {{- with .Values.webhookTester.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      securityContext:
+        {{- toYaml .Values.webhookTester.podSecurityContext | nindent 8 }}
+      containers:
+        - name: webhook-tester
+          image: "{{ .Values.webhookTester.image.repository }}:{{ .Values.webhookTester.image.tag }}"
+          imagePullPolicy: {{ .Values.webhookTester.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.webhookTester.securityContext | nindent 12 }}
+          args:
+            - start
+            - --storage-driver=memory
+            - --max-requests={{ .Values.webhookTester.maxRequests }}
+            - --auto-create-sessions
+            - --port=8080
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+          resources:
+            {{- toYaml .Values.webhookTester.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}

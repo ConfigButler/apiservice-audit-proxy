@@ -101,3 +101,70 @@ extraArgs: []
 env: []
 volumes: []
 volumeMounts: []
+
+# Optional demo component: webhook-tester receives audit events from the proxy
+# and displays them in a live browser UI. Disabled by default.
+#
+# When enabled, the chart generates the Secret named by webhook.kubeconfigSecretName
+# and points it at the in-cluster webhook-tester Service. The proxy's audit webhook
+# is automatically wired to the correct session UUID.
+webhookTester:
+  enabled: false
+
+  image:
+    repository: ghcr.io/tarampampam/webhook-tester
+    pullPolicy: IfNotPresent
+    tag: "2.3.0"
+
+  replicaCount: 1
+
+  # Session UUID for proxy audit events (Lane B).
+  # This UUID is baked into the generated webhook kubeconfig and forms the
+  # path the proxy POSTs to. It is also the path you open in the browser UI.
+  # Using a fixed value means the browser URL and kubeconfig are stable across
+  # Helm upgrades. Override to use your own UUID.
+  proxySessionUUID: "aabbccdd-0000-4000-0000-000000000002"
+
+  # Session UUID for kube-apiserver native audit events (Lane A).
+  # The e2e cluster's audit webhook-config.yaml points here.
+  # This is informational only — the chart does not configure the kube-apiserver.
+  # It is printed in Helm NOTES so the two browser URLs are shown side-by-side.
+  kubeApiserverSessionUUID: "aabbccdd-0000-4000-0000-000000000001"
+
+  # Maximum number of requests stored per session (in-memory).
+  maxRequests: 128
+
+  service:
+    type: ClusterIP
+    port: 8080
+
+  ingress:
+    enabled: true
+    # ingressClassName selects the Ingress controller. k3d ships Traefik by default.
+    className: traefik
+    # host: "" means the Ingress rule matches any hostname (useful for local clusters).
+    # Set to a real hostname (e.g. webhook-tester.example.com) for production-style access.
+    host: ""
+    annotations: {}
+
+  resources: {}
+
+  podAnnotations: {}
+
+  # webhook-tester runs as UID 10001 (from the upstream image).
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001

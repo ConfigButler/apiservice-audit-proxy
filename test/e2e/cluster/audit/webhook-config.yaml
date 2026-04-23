@@ -1,0 +1,29 @@
+# Bootstrap audit webhook config for kube-apiserver.
+#
+# Points at Traefik's websecure NodePort (30444) on the loopback interface.
+# kube-proxy's iptables rules on the server node forward this to the
+# Traefik pod, which routes to the webhook-tester Service.
+#
+# insecure-skip-tls-verify is intentional: Traefik uses its default
+# self-signed cert and we do not need to establish a trust chain here.
+#
+# The path segment is the webhook-tester session UUID for Lane A
+# (kube-apiserver native audit events). It is a fixed well-known value
+# so the browser URL is predictable without querying the cluster.
+apiVersion: v1
+kind: Config
+preferences: {}
+clusters:
+  - name: webhook-tester
+    cluster:
+      server: https://127.0.0.1:30444/aabbccdd-0000-4000-0000-000000000001
+      insecure-skip-tls-verify: true
+contexts:
+  - name: webhook
+    context:
+      cluster: webhook-tester
+      user: kube-apiserver
+current-context: webhook
+users:
+  - name: kube-apiserver
+    user: {}

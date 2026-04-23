@@ -47,6 +47,7 @@
     "source=auditproxydotkube,target=/home/vscode/.kube,type=volume"
   ],
   "containerEnv": {
+    "HOST_PROJECT_PATH": "${localWorkspaceFolder}",
     "GIT_USER_NAME": "${localEnv:GIT_USER_NAME}",
     "GIT_USER_EMAIL": "${localEnv:GIT_USER_EMAIL}"
   }
