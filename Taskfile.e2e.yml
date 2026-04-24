@@ -48,6 +48,9 @@ vars:
   AUDIT_WEBHOOK_BOOTSTRAP_SOURCE: '{{.AUDIT_ASSET_SOURCE_DIR}}/webhook-config.yaml'
   AUDIT_POLICY_PATH: '{{.AUDIT_ASSET_DIR}}/policy.yaml'
   AUDIT_WEBHOOK_CONFIG_PATH: '{{.AUDIT_ASSET_DIR}}/webhook-config.yaml'
+  WEBHOOK_TESTER_LOCAL_PORT: '{{.WEBHOOK_TESTER_LOCAL_PORT | default "18090"}}'
+  WEBHOOK_TESTER_SERVICE_PORT: '{{.WEBHOOK_TESTER_SERVICE_PORT | default "8080"}}'
+  WEBHOOK_TESTER_BASE_URL: 'http://127.0.0.1:{{.WEBHOOK_TESTER_LOCAL_PORT}}'
 
 tasks:
   e2e:doctor:
@@ -109,18 +112,20 @@ tasks:
 
   e2e:test-smoke:
     desc: Run the standalone k3d smoke scenario against the aggregated API path
+    deps:
+      - e2e:portforward-webhook-tester
     cmds:
-      - task: e2e:deploy-with-webhook-tester
-      - "CTX={{.CTX}} WEBHOOK_TESTER_NAMESPACE={{.E2E_PROXY_NAMESPACE}} go test -tags=e2e -run 'TestSmoke' -count=1 -v ./test/e2e"
+      - "CTX={{.CTX}} WEBHOOK_TESTER_BASE_URL={{.WEBHOOK_TESTER_BASE_URL}} go test -tags=e2e -run 'TestSmoke' -count=1 -v ./test/e2e"
 
   e2e:test-smoke-backend-ca:
     desc: Run the smoke scenario with backend TLS validated by an explicit CA bundle
-    cmds:
-      - task: e2e:_proxy-with-webhook-tester-installed
+    deps:
+      - task: e2e:portforward-webhook-tester
         vars:
           E2E_BACKEND_MANIFEST_DIR: test/e2e/setup/manifests/sample-apiserver-backend-ca
           E2E_PROXY_VALUES_FILE: test/e2e/values/proxy-cert-manager-backend-ca.yaml
-      - "CTX={{.CTX}} WEBHOOK_TESTER_NAMESPACE={{.E2E_PROXY_NAMESPACE}} go test -tags=e2e -run 'TestSmoke' -count=1 -v ./test/e2e"
+    cmds:
+      - "CTX={{.CTX}} WEBHOOK_TESTER_BASE_URL={{.WEBHOOK_TESTER_BASE_URL}} go test -tags=e2e -run 'TestSmoke' -count=1 -v ./test/e2e"
 
   e2e:test-image-refresh:
     desc: Validate image load → pod digest chain (cluster required; runs after smoke)
@@ -138,15 +143,47 @@ tasks:
     cmds:
       - task: e2e:_proxy-with-webhook-tester-installed
 
+  e2e:portforward-webhook-tester:
+    desc: Ensure a local port-forward to webhook-tester is running
+    deps:
+      - e2e:deploy-with-webhook-tester
+    status:
+      - 'curl -fsS {{.WEBHOOK_TESTER_BASE_URL}}/healthz >/dev/null 2>&1'
+    cmds:
+      - |
+        export CTX="{{.CTX}}"
+        export KUBECTL="{{.KUBECTL}}"
+        export STAMPS_DIR="{{.STAMPS_DIR}}"
+        export WEBHOOK_TESTER_NAMESPACE="{{.E2E_PROXY_NAMESPACE}}"
+        export E2E_RELEASE_NAME="{{.E2E_RELEASE_NAME}}"
+        export WEBHOOK_TESTER_LOCAL_PORT="{{.WEBHOOK_TESTER_LOCAL_PORT}}"
+        export WEBHOOK_TESTER_SERVICE_PORT="{{.WEBHOOK_TESTER_SERVICE_PORT}}"
+        bash hack/e2e/ensure-webhook-tester-port-forward.sh
+
+  e2e:portforward-stop:
+    desc: Stop the local webhook-tester port-forward
+    cmds:
+      - |
+        pid_file="{{.STAMPS_DIR}}/webhook-tester-{{.WEBHOOK_TESTER_LOCAL_PORT}}.pid"
+        if [ -f "${pid_file}" ]; then
+          pid="$(tr -d '\n\r' < "${pid_file}" || true)"
+          if [ -n "${pid}" ]; then
+            kill "${pid}" 2>/dev/null || true
+          fi
+          rm -f "${pid_file}"
+        fi
+        pkill -f "kubectl.*port-forward.*svc/{{.E2E_RELEASE_NAME}}-webhook-tester.*{{.WEBHOOK_TESTER_LOCAL_PORT}}:{{.WEBHOOK_TESTER_SERVICE_PORT}}" 2>/dev/null || true
+
   e2e:test-audit-gap:
     desc: |
       Assert the audit gap for aggregated API requests.
       Lane A (kube-apiserver native) must have a hollow event; Lane B (proxy) must have the full event.
       Requires: cluster created with audit webhook baked in + webhookTester.enabled=true.
+    deps:
+      - e2e:portforward-webhook-tester
     cmds:
-      - task: e2e:deploy-with-webhook-tester
       - |
-        CTX={{.CTX}} WEBHOOK_TESTER_NAMESPACE={{.E2E_PROXY_NAMESPACE}} \
+        CTX={{.CTX}} WEBHOOK_TESTER_BASE_URL={{.WEBHOOK_TESTER_BASE_URL}} \
           go test -tags=e2e -run 'TestAggregatedAPIAuditGap' -count=1 -v ./test/e2e
 
   e2e:cluster-down:

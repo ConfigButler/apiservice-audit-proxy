@@ -43,6 +43,19 @@ task helm:lint
 task e2e:test-smoke
 ```
 
+To open the local webhook-tester UI used by the e2e demo path:
+
+```bash
+task e2e:portforward-webhook-tester
+```
+
+It reuses an existing healthy forward when possible. Then open:
+
+- proxy audit events: <http://localhost:18090/s/aabbccdd-0000-4000-0000-000000000002>
+- kube-apiserver audit events: <http://localhost:18090/s/aabbccdd-0000-4000-0000-000000000001>
+
+Stop it with `task e2e:portforward-stop`.
+
 ## Demo Chart Path
 
 The chart keeps production defaults in `values.yaml` and puts the coordinated

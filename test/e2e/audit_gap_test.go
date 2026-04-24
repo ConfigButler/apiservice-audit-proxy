@@ -50,13 +50,12 @@ package e2e
 // - The k3d cluster must have been created with audit webhook support baked in
 //   (test/e2e/cluster/audit/ files present at cluster creation time).
 // - The Helm chart must be deployed with webhookTester.enabled=true.
-// - Environment: CTX (kube context), WEBHOOK_TESTER_NAMESPACE (default: wardle).
+// - Environment: CTX (kube context), WEBHOOK_TESTER_BASE_URL.
 
 import (
 	"context"
 	"fmt"
 	"net/http"
-	"os"
 	"os/exec"
 	"testing"
 	"time"
@@ -68,11 +67,6 @@ func TestAggregatedAPIAuditGap(t *testing.T) {
 	ctx := context.Background()
 	kubectlContext := requireEnv(t, "CTX")
 
-	webhookTesterNamespace := os.Getenv("WEBHOOK_TESTER_NAMESPACE")
-	if webhookTesterNamespace == "" {
-		webhookTesterNamespace = "wardle"
-	}
-
 	client := newKubectlClient(t, kubectlContext)
 
 	// Wait for the aggregated APIService to be reachable before doing anything.
@@ -82,10 +76,7 @@ func TestAggregatedAPIAuditGap(t *testing.T) {
 		"--timeout=240s",
 	)
 
-	// Port-forward to webhook-tester. Both session queries go through this tunnel.
-	wtURL, stopPF := startPortForwardToServicePort(t, ctx, client, webhookTesterNamespace,
-		webhookTesterSvcName, webhookTesterLocalPort, webhookTesterSvcPort)
-	defer stopPF()
+	wtURL := webhookTesterBaseURL()
 
 	// Wait for webhook-tester to respond before clearing sessions.
 	waitFor(t, 30*time.Second, func() error {

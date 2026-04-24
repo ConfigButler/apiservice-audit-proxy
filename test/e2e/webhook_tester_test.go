@@ -3,11 +3,12 @@
 package e2e
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
+	"strings"
 	"testing"
 
 	auditv1 "k8s.io/apiserver/pkg/apis/audit/v1"
@@ -20,9 +21,7 @@ const (
 	auditGapKubeApiserverSessionUUID = "aabbccdd-0000-4000-0000-000000000001"
 	auditGapProxySessionUUID         = "aabbccdd-0000-4000-0000-000000000002"
 
-	webhookTesterSvcName   = "apiservice-audit-proxy-webhook-tester"
-	webhookTesterLocalPort = "18090"
-	webhookTesterSvcPort   = "8080"
+	webhookTesterDefaultBaseURL = "http://127.0.0.1:18090"
 )
 
 type webhookTesterEntry struct {
@@ -96,25 +95,10 @@ func clearWebhookTesterSession(t *testing.T, baseURL, sessionUUID string) {
 	_ = resp.Body.Close()
 }
 
-// startPortForwardToServicePort starts a kubectl port-forward to a specific
-// service port and returns the base URL and a stop function.
-func startPortForwardToServicePort(
-	t *testing.T,
-	ctx context.Context,
-	client kubectlClient,
-	namespace, serviceName, localPort, servicePort string,
-) (string, func()) {
-	t.Helper()
-
-	pfCtx, cancel := context.WithCancel(ctx)
-	cmd := client.command(pfCtx,
-		"-n", namespace, "port-forward",
-		"svc/"+serviceName,
-		localPort+":"+servicePort,
-	)
-	if err := cmd.Start(); err != nil {
-		cancel()
-		t.Fatalf("start kubectl port-forward to %s/%s: %v", namespace, serviceName, err)
+func webhookTesterBaseURL() string {
+	baseURL := os.Getenv("WEBHOOK_TESTER_BASE_URL")
+	if baseURL == "" {
+		baseURL = webhookTesterDefaultBaseURL
 	}
-	return "http://127.0.0.1:" + localPort, func() { cancel(); _ = cmd.Wait() }
+	return strings.TrimRight(baseURL, "/")
 }

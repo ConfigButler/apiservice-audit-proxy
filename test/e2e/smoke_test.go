@@ -23,11 +23,6 @@ func TestSmoke(t *testing.T) {
 	ctx := context.Background()
 	kubectlContext := requireEnv(t, "CTX")
 
-	webhookTesterNamespace := os.Getenv("WEBHOOK_TESTER_NAMESPACE")
-	if webhookTesterNamespace == "" {
-		webhookTesterNamespace = "wardle"
-	}
-
 	client := newKubectlClient(t, kubectlContext)
 
 	client.run(ctx,
@@ -72,10 +67,7 @@ spec:
 		t.Fatalf("unexpected flunder payload: %s", flunderJSON)
 	}
 
-	// Port-forward to the webhook-tester. All session queries go through this tunnel.
-	wtURL, stopPF := startPortForwardToServicePort(t, ctx, client, webhookTesterNamespace,
-		webhookTesterSvcName, webhookTesterLocalPort, webhookTesterSvcPort)
-	defer stopPF()
+	wtURL := webhookTesterBaseURL()
 
 	// Wait for webhook-tester to be reachable.
 	waitFor(t, 30*time.Second, func() error {
@@ -193,4 +185,3 @@ func decodeJSON(t *testing.T, payload []byte, target any) {
 		t.Fatalf("decode json: %v\n%s", err, string(payload))
 	}
 }
-
