@@ -37,8 +37,8 @@ dependency graph is roughly right. But:
   from the Taskfile.** So every `task e2e:test-smoke` rebuilds, reloads, and
   re-imports both images, even when the stamp says nothing changed.
 - There are no stamps for any other readiness step: cluster-up, flux-bootstrap,
-  backend-deployed, webhook-kubeconfig-written, requestheader-ca-copied,
-  proxy-helm-installed. So every smoke run re-executes all of them.
+  requestheader-ca-copied, proxy-helm-installed. So every smoke run re-executes
+  all of them.
 - The "build images concurrently with cluster-up" opportunity is missed —
   these have no dependency on each other.
 
@@ -191,12 +191,8 @@ task per readiness boundary, each with its own stamp under
 | `_flux-setup-ready` | `flux-setup.ready` | `flux.installed`, `test/e2e/setup/flux/**` |
 | `_services-ready` | `services.ready` | `flux-setup.ready`, `test/e2e/setup/manifests/**/*.yaml` |
 | `_proxy-image-loaded` | `proxy-image.stamp` (already exists) | image source tree + Dockerfile |
-| `_mock-webhook-image-loaded` | `mock-webhook-image.stamp` (already exists) | same source tree (but mock binary) + Dockerfile |
-| `_backend-deployed` | `backend.deployed` | `services.ready`, `{{.E2E_BACKEND_MANIFEST_DIR}}/**` |
-| `_mock-webhook-deployed` | `mock-webhook.deployed` | `mock-webhook-image.stamp`, `test/e2e/setup/manifests/mock-audit-webhook/**` |
-| `_requestheader-ca-copied` | `requestheader-ca.applied` | `backend.deployed` |
-| `_webhook-kubeconfig-written` | `webhook-kubeconfig.applied` | `mock-webhook.deployed` |
-| `_proxy-installed` | `proxy.installed` (content = image digest) | `proxy-image.stamp`, `requestheader-ca.applied`, `webhook-kubeconfig.applied`, `charts/apiservice-audit-proxy/**`, `{{.E2E_PROXY_VALUES_FILE}}` |
+| `_requestheader-ca-copied` | `requestheader-ca.applied` | `services.ready`, `hack/e2e/write-requestheader-client-ca.sh` |
+| `_proxy-with-webhook-tester-installed` | `proxy-webhook-tester.installed` (content = image digest + values file) | `proxy-image.stamp`, `requestheader-ca.applied`, `charts/apiservice-audit-proxy/**`, `{{.E2E_PROXY_VALUES_FILE}}` |
 
 Then rewrite the public tasks as thin chains:
 

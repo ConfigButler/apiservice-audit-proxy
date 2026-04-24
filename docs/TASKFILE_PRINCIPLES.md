@@ -243,7 +243,7 @@ Avoid this pattern:
 e2e:_requestheader-ca-copied:
   method: checksum
   sources:
-    - '{{.STAMPS_DIR}}/backend.deployed'
+    - '{{.STAMPS_DIR}}/services.ready'
     - hack/e2e/write-requestheader-client-ca.sh
   generates:
     - '{{.STAMPS_DIR}}/requestheader-ca.applied'

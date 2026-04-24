@@ -37,7 +37,7 @@ vars:
       fi
   E2E_PROXY_NAMESPACE: '{{.E2E_PROXY_NAMESPACE | default "wardle"}}'
   E2E_RELEASE_NAME: '{{.E2E_RELEASE_NAME | default "apiservice-audit-proxy"}}'
-  E2E_BACKEND_MANIFEST_DIR: '{{.E2E_BACKEND_MANIFEST_DIR | default "test/e2e/setup/manifests/sample-apiserver"}}'
+  E2E_BACKEND_DEPLOYMENT: '{{.E2E_BACKEND_DEPLOYMENT | default "api-backend"}}'
   E2E_PROXY_VALUES_FILE: '{{.E2E_PROXY_VALUES_FILE | default "test/e2e/values/proxy-cert-manager.yaml"}}'
   FLUX_NAMESPACE: '{{.FLUX_NAMESPACE | default "flux-system"}}'
   FLUX_WAIT_TIMEOUT: '{{.FLUX_WAIT_TIMEOUT | default "900s"}}'
@@ -85,18 +85,13 @@ tasks:
       - task: e2e:build-image
       - task: e2e:_proxy-image-loaded
 
-  e2e:deploy-backend:
-    desc: Deploy the sample aggregated backend and its backend client cert wiring
-    cmds:
-      - task: e2e:_backend-deployed
-
   e2e:prepare-requestheader-client-ca:
     desc: Copy the cluster requestheader client CA into the proxy namespace for secure delegated identity trust
     cmds:
       - task: e2e:_requestheader-ca-copied
 
   e2e:deploy-proxy:
-    desc: Install the pass-through proxy with cert-manager-backed serving TLS and webhook-tester
+    desc: Install the sample backend, pass-through proxy, and webhook-tester with cert-manager-backed TLS
     cmds:
       - task: e2e:_proxy-with-webhook-tester-installed
 
@@ -122,7 +117,6 @@ tasks:
     deps:
       - task: e2e:portforward-webhook-tester
         vars:
-          E2E_BACKEND_MANIFEST_DIR: test/e2e/setup/manifests/sample-apiserver-backend-ca
           E2E_PROXY_VALUES_FILE: test/e2e/values/proxy-cert-manager-backend-ca.yaml
     cmds:
       - "CTX={{.CTX}} WEBHOOK_TESTER_BASE_URL={{.WEBHOOK_TESTER_BASE_URL}} go test -tags=e2e -run 'TestSmoke' -count=1 -v ./test/e2e"
@@ -139,7 +133,7 @@ tasks:
       - task: e2e:test-image-refresh
 
   e2e:deploy-with-webhook-tester:
-    desc: Deploy the proxy Helm chart with webhookTester.enabled=true (demo/audit-gap mode)
+    desc: Deploy the Helm-managed sample backend, proxy, and webhook-tester
     cmds:
       - task: e2e:_proxy-with-webhook-tester-installed
 
@@ -321,36 +315,17 @@ tasks:
         bash hack/e2e/load-image.sh
       - rm -f {{.STAMPS_DIR}}/proxy-webhook-tester.installed
 
-  e2e:_backend-deployed:
-    method: timestamp
-    sources:
-      - '{{.STAMPS_DIR}}/services.ready'
-      - '{{.E2E_BACKEND_MANIFEST_DIR}}/**'
-    generates:
-      - '{{.STAMPS_DIR}}/backend.deployed'
-    status:
-      - test "$(cat "{{.STAMPS_DIR}}/backend.deployed" 2>/dev/null)" = "{{.E2E_BACKEND_MANIFEST_DIR}}"
-      - '{{.KUBECTL}} --context {{.CTX}} -n {{.E2E_PROXY_NAMESPACE}} rollout status deploy/wardle-server --timeout=10s >/dev/null 2>&1'
-    cmds:
-      - task: e2e:_services-ready
-      - "{{.KUBECTL}} --context {{.CTX}} apply -k {{.E2E_BACKEND_MANIFEST_DIR}}"
-      - "{{.KUBECTL}} --context {{.CTX}} -n {{.E2E_PROXY_NAMESPACE}} rollout status deploy/wardle-server --timeout=180s"
-      - printf '%s' "{{.E2E_BACKEND_MANIFEST_DIR}}" > {{.STAMPS_DIR}}/backend.deployed
-
   e2e:_requestheader-ca-copied:
     method: timestamp
     sources:
-      - '{{.STAMPS_DIR}}/backend.deployed'
+      - '{{.STAMPS_DIR}}/services.ready'
       - hack/e2e/write-requestheader-client-ca.sh
     generates:
       - '{{.STAMPS_DIR}}/requestheader-ca.applied'
     status:
-      - test "$(cat "{{.STAMPS_DIR}}/backend.deployed" 2>/dev/null)" = "{{.E2E_BACKEND_MANIFEST_DIR}}"
       - '{{.KUBECTL}} --context {{.CTX}} -n {{.E2E_PROXY_NAMESPACE}} get secret/audit-pass-through-requestheader-client-ca >/dev/null 2>&1'
     cmds:
-      - task: e2e:_backend-deployed
-        vars:
-          E2E_BACKEND_MANIFEST_DIR: "{{.E2E_BACKEND_MANIFEST_DIR}}"
+      - task: e2e:_services-ready
       - "{{.KUBECTL}} --context {{.CTX}} create namespace {{.E2E_PROXY_NAMESPACE}} --dry-run=client -o yaml | {{.KUBECTL}} --context {{.CTX}} apply -f -"
       - |
         export CTX="{{.CTX}}"
@@ -370,15 +345,14 @@ tasks:
       - '{{.STAMPS_DIR}}/proxy-webhook-tester.installed'
     status:
       - '{{.KUBECTL}} --context {{.CTX}} -n {{.E2E_PROXY_NAMESPACE}} rollout status deploy/{{.E2E_RELEASE_NAME}} --timeout=10s >/dev/null 2>&1'
+      - '{{.KUBECTL}} --context {{.CTX}} -n {{.E2E_PROXY_NAMESPACE}} rollout status deploy/{{.E2E_BACKEND_DEPLOYMENT}} --timeout=10s >/dev/null 2>&1'
       - '{{.KUBECTL}} --context {{.CTX}} -n {{.E2E_PROXY_NAMESPACE}} rollout status deploy/{{.E2E_RELEASE_NAME}}-webhook-tester --timeout=10s >/dev/null 2>&1'
       - |
-        expected="$(printf 'mode=webhook-tester\nimage=%s\nvalues=%s\nbackend=%s\n' "$(cat "{{.STAMPS_DIR}}/proxy-image.stamp" 2>/dev/null)" "{{.E2E_PROXY_VALUES_FILE}}" "{{.E2E_BACKEND_MANIFEST_DIR}}")"
+        expected="$(printf 'mode=webhook-tester\nimage=%s\nvalues=%s\n' "$(cat "{{.STAMPS_DIR}}/proxy-image.stamp" 2>/dev/null)" "{{.E2E_PROXY_VALUES_FILE}}")"
         test "$(cat "{{.STAMPS_DIR}}/proxy-webhook-tester.installed" 2>/dev/null)" = "${expected}"
     cmds:
       - task: e2e:load-image
       - task: e2e:_requestheader-ca-copied
-        vars:
-          E2E_BACKEND_MANIFEST_DIR: "{{.E2E_BACKEND_MANIFEST_DIR}}"
       - |
         {{.HELM}} upgrade --install {{.E2E_RELEASE_NAME}} ./charts/apiservice-audit-proxy \
           --kube-context {{.CTX}} \
@@ -388,12 +362,12 @@ tasks:
           --set image.repository={{.E2E_PROXY_IMAGE_REPOSITORY}} \
           --set image.tag={{.E2E_PROXY_IMAGE_TAG}} \
           --set webhookTester.enabled=true
+      - "{{.KUBECTL}} --context {{.CTX}} -n {{.E2E_PROXY_NAMESPACE}} rollout status deploy/{{.E2E_BACKEND_DEPLOYMENT}} --timeout=180s"
       - "{{.KUBECTL}} --context {{.CTX}} -n {{.E2E_PROXY_NAMESPACE}} rollout status deploy/{{.E2E_RELEASE_NAME}}-webhook-tester --timeout=180s"
       - "{{.KUBECTL}} --context {{.CTX}} -n {{.E2E_PROXY_NAMESPACE}} rollout restart deploy/{{.E2E_RELEASE_NAME}}"
       - "{{.KUBECTL}} --context {{.CTX}} -n {{.E2E_PROXY_NAMESPACE}} rollout status deploy/{{.E2E_RELEASE_NAME}} --timeout=180s"
       - |
-        printf 'mode=webhook-tester\nimage=%s\nvalues=%s\nbackend=%s\n' \
+        printf 'mode=webhook-tester\nimage=%s\nvalues=%s\n' \
           "$(<"{{.STAMPS_DIR}}/proxy-image.stamp")" \
           "{{.E2E_PROXY_VALUES_FILE}}" \
-          "{{.E2E_BACKEND_MANIFEST_DIR}}" \
           > {{.STAMPS_DIR}}/proxy-webhook-tester.installed

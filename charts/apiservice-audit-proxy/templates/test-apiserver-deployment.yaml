@@ -36,6 +36,10 @@ spec:
           args:
             - --etcd-servers=http://localhost:2379
             - --client-ca-file=/etc/wardle/proxy-client-ca/ca.crt
+            {{- if .Values.testApiserver.backendServingCert.enabled }}
+            - --tls-cert-file=/etc/wardle/serving-cert/tls.crt
+            - --tls-private-key-file=/etc/wardle/serving-cert/tls.key
+            {{- end }}
           ports:
             - name: https
               containerPort: 443
@@ -46,6 +50,11 @@ spec:
             - mountPath: /etc/wardle/proxy-client-ca
               name: proxy-client-ca
               readOnly: true
+            {{- if .Values.testApiserver.backendServingCert.enabled }}
+            - mountPath: /etc/wardle/serving-cert
+              name: serving-cert
+              readOnly: true
+            {{- end }}
         - name: etcd
           image: "{{ .Values.testApiserver.etcd.image.repository }}:{{ .Values.testApiserver.etcd.image.tag }}"
           imagePullPolicy: {{ .Values.testApiserver.etcd.image.pullPolicy }}
@@ -55,6 +64,11 @@ spec:
         - name: proxy-client-ca
           secret:
             secretName: {{ include "apiservice-audit-proxy.testApiserver.clientCASecretName" . }}
+        {{- if .Values.testApiserver.backendServingCert.enabled }}
+        - name: serving-cert
+          secret:
+            secretName: {{ include "apiservice-audit-proxy.testApiserver.servingCertSecretName" . }}
+        {{- end }}
       {{- with .Values.testApiserver.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

@@ -18,6 +18,21 @@ backend:
   clientCertSecretName: audit-pass-through-backend-client-cert
   serverName: api-backend.wardle.svc.cluster.local
 
+testApiserver:
+  enabled: true
+  nameOverride: api-backend
+  backendClientCert:
+    selfSignedIssuerName: audit-pass-through-backend-selfsigned
+    caSecretName: audit-pass-through-backend-client-ca
+    caIssuerName: audit-pass-through-backend-client-ca-issuer
+    clientSecretName: audit-pass-through-backend-client-cert
+  backendServingCert:
+    enabled: true
+    selfSignedIssuerName: audit-pass-through-backend-serving-selfsigned
+    caSecretName: audit-pass-through-backend-serving-ca
+    caIssuerName: audit-pass-through-backend-serving-ca-issuer
+    certSecretName: audit-pass-through-backend-serving-cert
+
 requestHeader:
   clientCASecretName: audit-pass-through-requestheader-client-ca
 

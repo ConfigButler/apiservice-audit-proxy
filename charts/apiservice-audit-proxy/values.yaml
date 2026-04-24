@@ -137,6 +137,14 @@ testApiserver:
     caIssuerName: ""
     clientSecretName: ""
 
+  backendServingCert:
+    enabled: false
+    selfSignedIssuerName: ""
+    caSecretName: ""
+    caIssuerName: ""
+    certSecretName: ""
+    dnsNames: []
+
   resources: {}
   etcdResources: {}
   podAnnotations: {}

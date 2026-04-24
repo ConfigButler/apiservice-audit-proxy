@@ -240,7 +240,6 @@ and there is nothing to do here. Worth a sanity-check pass:
   consuming webhook-tester's API or running as its own receiver. This was
   the WORK-demo-stack Phase 3 question; the answer is now "yes, but not
   yet, and not here."
-- **`testApiserver` as optional Helm sub-deployment**: still a real wishlist
-  item — would let `helm install --set testApiserver.enabled=true
-  --set webhookTester.enabled=true` produce a complete demo from the chart
-  alone. Captured in [docs/STATUS.md](STATUS.md#wishlist-with-concrete-how-to).
+- **`testApiserver` as optional Helm sub-deployment**: done. The e2e smoke
+  values now use `testApiserver.enabled=true`, and the old sample-apiserver
+  kustomize fixtures have been removed.

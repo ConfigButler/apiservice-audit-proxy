@@ -100,10 +100,9 @@ e2e:test-smoke
          ├─ e2e:load-image
          │   └─ e2e:build-image      (builds apiservice-audit-proxy:e2e-local)
          ├─ e2e:prepare-requestheader-client-ca
-         │   └─ e2e:deploy-backend
-         │       └─ e2e:flux-bootstrap
-         │           └─ e2e:cluster-up
-         └─ Helm webhookTester.enabled=true
+         │   └─ e2e:flux-bootstrap
+         │       └─ e2e:cluster-up
+         └─ Helm testApiserver.enabled=true + webhookTester.enabled=true
              └─ chart-generated webhook kubeconfig Secret
 ```
 

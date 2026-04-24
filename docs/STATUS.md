@@ -43,7 +43,7 @@ is implemented, and the complete demo install now lives in
 | `e2e:deploy-with-webhook-tester`, `e2e:test-smoke`, and `e2e:test-audit-gap` Taskfile paths | Done | [Taskfile.e2e.yml](../Taskfile.e2e.yml) |
 | Proxy pod restarts when the Helm-managed webhook kubeconfig changes | Done | [deployment.yaml](../charts/apiservice-audit-proxy/templates/deployment.yaml) includes `checksum/webhook-kubeconfig` when webhook-tester is enabled |
 | `mock-audit-webhook` binary, manifests, script, Docker build arg, and Tilt resource removed | Done | [Dockerfile](../Dockerfile), [Taskfile.e2e.yml](../Taskfile.e2e.yml), [Tiltfile](../Tiltfile) |
-| Optional `testApiserver` Helm deployment | Done | [test-apiserver-deployment.yaml](../charts/apiservice-audit-proxy/templates/test-apiserver-deployment.yaml), [test-apiserver-service.yaml](../charts/apiservice-audit-proxy/templates/test-apiserver-service.yaml), [test-apiserver-rbac.yaml](../charts/apiservice-audit-proxy/templates/test-apiserver-rbac.yaml), [test-apiserver-client-certs.yaml](../charts/apiservice-audit-proxy/templates/test-apiserver-client-certs.yaml) |
+| Optional `testApiserver` Helm deployment | Done | [test-apiserver-deployment.yaml](../charts/apiservice-audit-proxy/templates/test-apiserver-deployment.yaml), [test-apiserver-service.yaml](../charts/apiservice-audit-proxy/templates/test-apiserver-service.yaml), [test-apiserver-rbac.yaml](../charts/apiservice-audit-proxy/templates/test-apiserver-rbac.yaml), [test-apiserver-client-certs.yaml](../charts/apiservice-audit-proxy/templates/test-apiserver-client-certs.yaml), [test-apiserver-serving-certs.yaml](../charts/apiservice-audit-proxy/templates/test-apiserver-serving-certs.yaml) |
 | Explicit full-demo values file | Done | [values-demo.yaml](../charts/apiservice-audit-proxy/values-demo.yaml) enables `testApiserver`, `webhookTester`, APIService registration, backend URL, and backend mTLS together |
 
 ### Devcontainer / Tooling
@@ -75,7 +75,7 @@ chart-managed webhook-tester receiver.
 
 | Phase | Item | State | Notes |
 |---|---|---|---|
-| 1a | `testApiserver` (sample-apiserver) as optional Helm sub-deployment | Done | Gated on `testApiserver.enabled`; complete demo config is in `values-demo.yaml` |
+| 1a | `testApiserver` (sample-apiserver) as optional Helm sub-deployment | Done | Gated on `testApiserver.enabled`; e2e and `values-demo.yaml` use the chart-managed backend |
 | 1b | `mockAuditWebhook` as optional Helm sub-deployment | Superseded | webhook-tester is the chosen receiver |
 | 1 | `demo.enabled` convenience preset | Not started | Depends on deciding what a Helm-only demo should include |
 | 2 | Add SSE stream + embedded HTML viewer to `mock-audit-webhook` | Superseded | webhook-tester now provides the live UI |

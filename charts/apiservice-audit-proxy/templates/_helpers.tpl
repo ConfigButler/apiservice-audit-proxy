@@ -211,6 +211,34 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- default (printf "%s-backend-client-cert" (include "apiservice-audit-proxy.fullname" .)) .Values.testApiserver.backendClientCert.clientSecretName | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
+{{- define "apiservice-audit-proxy.testApiserver.servingSelfSignedIssuerName" -}}
+{{- default (printf "%s-backend-serving-selfsigned" (include "apiservice-audit-proxy.fullname" .)) .Values.testApiserver.backendServingCert.selfSignedIssuerName | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{- define "apiservice-audit-proxy.testApiserver.servingCASecretName" -}}
+{{- default (printf "%s-backend-serving-ca" (include "apiservice-audit-proxy.fullname" .)) .Values.testApiserver.backendServingCert.caSecretName | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{- define "apiservice-audit-proxy.testApiserver.servingCAIssuerName" -}}
+{{- default (printf "%s-backend-serving-ca" (include "apiservice-audit-proxy.fullname" .)) .Values.testApiserver.backendServingCert.caIssuerName | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{- define "apiservice-audit-proxy.testApiserver.servingCertSecretName" -}}
+{{- default (printf "%s-backend-serving-cert" (include "apiservice-audit-proxy.fullname" .)) .Values.testApiserver.backendServingCert.certSecretName | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{- define "apiservice-audit-proxy.testApiserver.servingDNSNames" -}}
+{{- $serviceName := include "apiservice-audit-proxy.testApiserver.fullname" . -}}
+{{- if .Values.testApiserver.backendServingCert.dnsNames -}}
+{{- toYaml .Values.testApiserver.backendServingCert.dnsNames -}}
+{{- else -}}
+- {{ $serviceName }}
+- {{ printf "%s.%s" $serviceName .Release.Namespace }}
+- {{ printf "%s.%s.svc" $serviceName .Release.Namespace }}
+- {{ printf "%s.%s.svc.cluster.local" $serviceName .Release.Namespace }}
+{{- end -}}
+{{- end }}
+
 {{/*
 Standard volume paths.
 */}}

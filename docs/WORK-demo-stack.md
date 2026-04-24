@@ -11,11 +11,12 @@ Make it trivially easy for someone evaluating `apiservice-audit-proxy` to deploy
 | Component | Status |
 |---|---|
 | `apiservice-audit-proxy` | Deployed via Helm chart |
-| `sample-apiserver` (backend) | kustomize only, used in e2e tests |
-| `mock-audit-webhook` | Binary + Dockerfile, kustomize only, used in e2e tests |
-| Web UI for audit events | Does not exist |
+| `sample-apiserver` (backend) | Optional Helm deployment via `testApiserver.enabled` |
+| `webhook-tester` | Optional Helm deployment via `webhookTester.enabled` |
+| Web UI for audit events | Provided by webhook-tester |
 
-The e2e setup already wires all three together, so the logic is proven. The gap is a user-facing path to get there.
+The e2e setup wires these together through Helm values, so the logic is proven
+without a second kustomize backend path.
 
 ---
 
