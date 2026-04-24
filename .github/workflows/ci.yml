@@ -15,6 +15,7 @@ env:
   CI_CACHE_SCOPE: apiservice-audit-proxy-ci
   DEV_CACHE_SCOPE: apiservice-audit-proxy-devcontainer
   IMAGE_CACHE_SCOPE: apiservice-audit-proxy-image
+  CI_WORKDIR: /workspaces/apiservice-audit-proxy
 
 permissions:
   contents: write
@@ -249,12 +250,12 @@ jobs:
         run: |
           docker run --rm \
             --network host \
-            -v "${GITHUB_WORKSPACE}:/workspaces/apiservice-audit-proxy" \
+            -v "${GITHUB_WORKSPACE}:${{ env.CI_WORKDIR }}" \
             -v /var/run/docker.sock:/var/run/docker.sock \
-            -w /workspaces/apiservice-audit-proxy \
+            -w "${{ env.CI_WORKDIR }}" \
             ${{ needs.build-ci-container.outputs.image }} \
             bash -lc "
-              git config --global --add safe.directory /workspaces/apiservice-audit-proxy
+              git config --global --add safe.directory ${{ env.CI_WORKDIR }}
               task e2e:test-taskfile
             "
 
@@ -287,14 +288,15 @@ jobs:
           mkdir -p /tmp/e2e-kube
           docker run --rm \
             --network host \
-            -v "${GITHUB_WORKSPACE}:/workspaces/apiservice-audit-proxy" \
+            -v "${GITHUB_WORKSPACE}:${{ env.CI_WORKDIR }}" \
             -v /var/run/docker.sock:/var/run/docker.sock \
             -v /tmp/e2e-kube:/root/.kube \
-            -w /workspaces/apiservice-audit-proxy \
+            -w "${{ env.CI_WORKDIR }}" \
             -e E2E_PROXY_IMAGE \
+            -e HOST_PROJECT_PATH=${{ github.workspace }} \
             ${{ needs.build-ci-container.outputs.image }} \
             bash -lc "
-              git config --global --add safe.directory /workspaces/apiservice-audit-proxy
+              git config --global --add safe.directory ${{ env.CI_WORKDIR }}
               task e2e:test-smoke-full
             "
 

@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -19,16 +18,16 @@ import (
 
 const (
 	smokeNamespace = "audit-pass-through-smoke"
-	webhookPort    = "19444"
 )
 
 func TestSmoke(t *testing.T) {
-	t.Parallel()
-
 	ctx := context.Background()
 	kubectlContext := requireEnv(t, "CTX")
-	webhookNamespace := requireEnv(t, "WEBHOOK_NAMESPACE")
-	webhookServiceName := requireEnv(t, "WEBHOOK_SERVICE_NAME")
+
+	webhookTesterNamespace := os.Getenv("WEBHOOK_TESTER_NAMESPACE")
+	if webhookTesterNamespace == "" {
+		webhookTesterNamespace = "wardle"
+	}
 
 	client := newKubectlClient(t, kubectlContext)
 
@@ -56,6 +55,11 @@ metadata:
 spec:
   reference: smoke-reference
 `, flunderName, smokeNamespace))
+	t.Cleanup(func() {
+		_ = exec.Command("kubectl", "--context", kubectlContext,
+			"-n", smokeNamespace, "delete", "flunder", flunderName,
+			"--ignore-not-found", "--wait=false").Run()
+	})
 
 	flunderJSON := client.run(ctx, "-n", smokeNamespace, "get", "flunder", flunderName, "-o", "json")
 	var flunder struct {
@@ -69,55 +73,37 @@ spec:
 		t.Fatalf("unexpected flunder payload: %s", flunderJSON)
 	}
 
-	webhookURL, stopPortForward := client.startPortForward(ctx, webhookNamespace, webhookServiceName, webhookPort)
-	defer stopPortForward()
+	// Port-forward to the webhook-tester. All session queries go through this tunnel.
+	wtURL, stopPF := startPortForwardToServicePort(t, ctx, client, webhookTesterNamespace,
+		webhookTesterSvcName, webhookTesterLocalPort, webhookTesterSvcPort)
+	defer stopPF()
 
-	waitFor(t, 60*time.Second, func() error {
-		response, err := http.Get(webhookURL + "/events")
+	// Wait for webhook-tester to be reachable.
+	waitFor(t, 30*time.Second, func() error {
+		resp, err := http.Get(wtURL + "/healthz")
 		if err != nil {
 			return err
 		}
-		defer func() {
-			_ = response.Body.Close()
-		}()
-		if response.StatusCode != http.StatusOK {
-			return fmt.Errorf("unexpected /events status: %d", response.StatusCode)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("webhook-tester /healthz: %d", resp.StatusCode)
 		}
 		return nil
 	})
 
-	var payload eventsPayload
+	// Poll the proxy session until the complete audit event for our flunder arrives.
 	waitFor(t, 180*time.Second, func() error {
-		response, err := http.Get(webhookURL + "/events")
-		if err != nil {
-			return err
-		}
-		defer func() {
-			_ = response.Body.Close()
-		}()
-		if response.StatusCode != http.StatusOK {
-			return fmt.Errorf("unexpected /events status: %d", response.StatusCode)
-		}
-
-		body, err := io.ReadAll(response.Body)
-		if err != nil {
-			return err
-		}
-		decodeJSON(t, body, &payload)
-
-		for _, item := range payload.Items {
-			for _, event := range item.EventList.Items {
-				if event.ObjectRef.Name != flunderName {
-					continue
-				}
-				if event.RequestObject == nil || event.ResponseObject == nil {
-					return fmt.Errorf("event for %s does not yet contain requestObject and responseObject", flunderName)
-				}
-				return nil
+		events := fetchAuditEvents(t, wtURL, auditGapProxySessionUUID)
+		for i := range events {
+			if events[i].ObjectRef == nil || events[i].ObjectRef.Name != flunderName {
+				continue
 			}
+			if events[i].RequestObject == nil || events[i].ResponseObject == nil {
+				return fmt.Errorf("event for %s missing RequestObject or ResponseObject", flunderName)
+			}
+			return nil
 		}
-
-		return fmt.Errorf("waiting for recovered audit payload for %s", flunderName)
+		return fmt.Errorf("waiting for complete audit event for flunder %s", flunderName)
 	})
 }
 
@@ -172,47 +158,6 @@ func (c kubectlClient) applyYAML(ctx context.Context, manifest string) {
 	}
 }
 
-func (c kubectlClient) startPortForward(ctx context.Context, namespace, serviceName, localPort string) (string, func()) {
-	c.t.Helper()
-
-	portForwardCtx, cancel := context.WithCancel(ctx)
-	logPath := filepath.Join(c.t.TempDir(), "port-forward.log")
-	logFile, err := os.Create(logPath)
-	if err != nil {
-		c.t.Fatalf("create port-forward log file: %v", err)
-	}
-
-	cmd := c.command(portForwardCtx, "-n", namespace, "port-forward", "svc/"+serviceName, localPort+":9444")
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
-	if err := cmd.Start(); err != nil {
-		_ = logFile.Close()
-		c.t.Fatalf("start kubectl port-forward: %v", err)
-	}
-
-	stop := func() {
-		cancel()
-		_ = cmd.Wait()
-		_ = logFile.Close()
-	}
-
-	return "http://127.0.0.1:" + localPort, stop
-}
-
-type eventsPayload struct {
-	Items []struct {
-		EventList struct {
-			Items []struct {
-				ObjectRef struct {
-					Name string `json:"name"`
-				} `json:"objectRef"`
-				RequestObject  map[string]any `json:"requestObject"`
-				ResponseObject map[string]any `json:"responseObject"`
-			} `json:"items"`
-		} `json:"eventList"`
-	} `json:"items"`
-}
-
 func requireEnv(t *testing.T, key string) string {
 	t.Helper()
 
@@ -249,3 +194,4 @@ func decodeJSON(t *testing.T, payload []byte, target any) {
 		t.Fatalf("decode json: %v\n%s", err, string(payload))
 	}
 }
+

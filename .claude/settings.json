@@ -1,8 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(k3d cluster *)",
-      "Bash(task e2e:test-smoke)",
+      "Bash(k3d *)",
+      "Bash(task *",
       "Bash(kubectl *)",
       "Read(//home/vscode/.config/k3d/**)",
       "Bash(KUBECONFIG=/home/vscode/.config/k3d/kubeconfig-audit-pass-through-e2e.yaml kubectl get nodes)",
@@ -15,7 +15,6 @@
       "Bash(read p *)",
       "Bash(grep -v \"^$\")",
       "Bash(ulimit -n)",
-      "Read(//proc/sys/fs/**)",
       "Bash(sudo sysctl *)",
       "Bash(docker run *)",
       "Bash(task ci *)",
