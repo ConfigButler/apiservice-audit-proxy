@@ -14,6 +14,9 @@ spec:
     metadata:
       annotations:
         kubectl.kubernetes.io/default-container: server
+        {{- if .Values.webhookTester.enabled }}
+        checksum/webhook-kubeconfig: {{ include (print $.Template.BasePath "/webhook-tester-kubeconfig-secret.yaml") . | sha256sum }}
+        {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

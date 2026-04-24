@@ -203,23 +203,19 @@ tasks:
   e2e:test-smoke:
     desc: Run the standalone k3d smoke scenario against the aggregated API path
     cmds:
-      - task: e2e:prepare
-      - "CTX={{.CTX}} WEBHOOK_NAMESPACE={{.E2E_WEBHOOK_NAMESPACE}} WEBHOOK_SERVICE_NAME={{.E2E_WEBHOOK_SERVICE_NAME}} go test -tags=e2e -run 'TestSmoke' -count=1 -v ./test/e2e"
-
-  e2e:prepare-backend-ca:
-    desc: Build, load, and install the smoke environment with backend server CA validation enabled
-    cmds:
-      - task: e2e:load-images
-      - task: e2e:deploy-proxy
-        vars:
-          E2E_BACKEND_MANIFEST_DIR: test/e2e/setup/manifests/sample-apiserver-backend-ca
-          E2E_PROXY_VALUES_FILE: test/e2e/values/proxy-cert-manager-backend-ca.yaml
+      - task: e2e:load-image
+      - task: e2e:deploy-with-webhook-tester
+      - "CTX={{.CTX}} WEBHOOK_TESTER_NAMESPACE={{.E2E_PROXY_NAMESPACE}} go test -tags=e2e -run 'TestSmoke' -count=1 -v ./test/e2e"
 
   e2e:test-smoke-backend-ca:
     desc: Run the smoke scenario with backend TLS validated by an explicit CA bundle
     cmds:
-      - task: e2e:prepare-backend-ca
-      - "CTX={{.CTX}} WEBHOOK_NAMESPACE={{.E2E_WEBHOOK_NAMESPACE}} WEBHOOK_SERVICE_NAME={{.E2E_WEBHOOK_SERVICE_NAME}} go test -tags=e2e -run 'TestSmoke' -count=1 -v ./test/e2e"
+      - task: e2e:load-image
+      - task: e2e:deploy-with-webhook-tester
+        vars:
+          E2E_BACKEND_MANIFEST_DIR: test/e2e/setup/manifests/sample-apiserver-backend-ca
+          E2E_PROXY_VALUES_FILE: test/e2e/values/proxy-cert-manager-backend-ca.yaml
+      - "CTX={{.CTX}} WEBHOOK_TESTER_NAMESPACE={{.E2E_PROXY_NAMESPACE}} go test -tags=e2e -run 'TestSmoke' -count=1 -v ./test/e2e"
 
   e2e:test-image-refresh:
     desc: Validate image load → pod digest chain (cluster required; runs after smoke)

@@ -3,3 +3,5 @@ coverage.out
 dist/
 .stamps/
 external-resources/
+*.env
+test/e2e/smoke_test.go

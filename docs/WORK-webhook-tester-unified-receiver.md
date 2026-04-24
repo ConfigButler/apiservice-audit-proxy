@@ -1,35 +1,62 @@
-# Unified Audit Demo with webhook-tester
+# Plan: Unify on upstream `webhook-tester`, retire `mock-audit-webhook`
 
-## Goal
+## Decision
 
-Replace the custom `mock-audit-webhook` binary with the upstream
-[tarampampam/webhook-tester](https://github.com/tarampampam/webhook-tester) as the single audit event receiver in the
-demo stack. This achieves two things at once:
+**We will use [tarampampam/webhook-tester](https://github.com/tarampampam/webhook-tester)
+as the single audit-webhook receiver — for both e2e tests and the demo —
+and remove the in-repo `mock-audit-webhook` binary.**
 
-1. **Side-by-side comparison**: the kube-apiserver's native audit webhook and the proxy's outbound audit webhook both
-   land in the same webhook-tester deployment, in separate sessions — one browser tab per lane, so the gap the proxy
-   fills is immediately visible.
-2. **Repo simplification** (stretch goal): if webhook-tester's API is sufficient for e2e test assertions,
-   `mock-audit-webhook` can eventually be retired.
-
-A cloned copy of webhook-tester lives at `external-resources/webhook-tester` for API investigation.
-
-> **Scope for this demo**: in-memory storage only. No Redis, no persistence. This is a small investigation setup.
-> In production, the audit event stream would be consumed directly by something like `gitops-reverser`.
+The "step-by-step toward this" lives at the bottom of this document.
 
 ---
 
-## Implementation Status
+## History (short version)
 
-| Phase | Status | Notes |
+1. The project shipped with a small in-repo `mock-audit-webhook` binary
+   (`cmd/mock-audit-webhook`, ~200 LOC) used by e2e tests as the audit
+   receiver and intended to be the demo viewer (with an SSE/HTML UI in a
+   future Phase 2 — see [WORK-demo-stack.md](WORK-demo-stack.md)).
+2. We then integrated upstream `webhook-tester` into the Helm chart as an
+   *optional* demo receiver (`webhookTester.enabled=true`) so the audit-gap
+   demo could be shown in a browser without building anything.
+3. While doing that, we baked the kube-apiserver's native audit webhook into
+   the local k3d cluster too — so a single webhook-tester deployment serves
+   both lanes (kube-apiserver native + this proxy) and the gap is visible
+   side-by-side in two browser tabs.
+4. e2e then grew a `TestAggregatedAPIAuditGap` that asserts on the contrast
+   directly. `TestSmoke` was rewritten to query webhook-tester instead of
+   `mock-audit-webhook` (commit
+   [`18462dc`](https://github.com/ConfigButler/apiservice-audit-proxy/commit/18462dc)).
+5. After fixing the deploy/Helm-restart bugs that fell out of step 4
+   (see [docs/STATUS.md](STATUS.md)), every e2e path that exercises an audit
+   webhook now goes through webhook-tester. The in-repo `mock-audit-webhook`
+   is no longer reached by any test, and its planned SSE/HTML viewer is
+   superseded by webhook-tester's UI.
+
+This plan formalises that direction and removes the dead weight.
+
+---
+
+## Why webhook-tester wins (and what we give up)
+
+| | webhook-tester (upstream) | `mock-audit-webhook` (in-repo) |
 |---|---|---|
-| 1. webhook-tester in Helm chart | ✅ Done | Deployed and validated end-to-end |
-| 2. kube-apiserver audit in e2e cluster (always on) | ✅ Done | Validated: Lane A silent, Lane B captures |
-| 3. mock-audit-webhook retirement | ⏳ Future | Not started — blocked on Phase 1 & 2 validation |
+| Maintenance | external, upstream issues + bugfixes | ours |
+| Browser UI | live, with WebSocket updates | none (the planned SSE/HTML UI was never built) |
+| Multiple sessions per deployment | yes (UUID per session — Lane A and Lane B in one pod) | no |
+| Container image | public (`ghcr.io/tarampampam/webhook-tester`) | we build + (optionally) publish ours |
+| Kubernetes-audit-aware view | no — generic JSON | could have been — but we never built it |
+| Build / Dockerfile complexity | none | a `BINARY` build-arg in the Dockerfile multiplexes between two binaries |
+
+**Trade-off accepted**: we lose the *option* of a Kubernetes-audit-aware UI.
+The raw JSON view in webhook-tester is sufficient for the gap demo, and if a
+schema-aware UI ever becomes worth building, it would deserve its own repo
+(see "Future" at the bottom of this document) rather than living inside
+the proxy.
 
 ---
 
-## The "Why" in One Picture
+## The "Why" in one picture
 
 ```mermaid
 graph LR
@@ -44,21 +71,18 @@ graph LR
     F --> H["Browser Tab B\n✅ complete event\nname + requestObject + responseObject"]
 ```
 
-The kube-apiserver **does** emit an audit event for aggregated API requests — but it is hollow. Because the
-request is proxied opaquely, the kube-apiserver cannot decode what happened inside the aggregated API server.
-The event arrives with `verb`, `resource`, and `responseStatus`, but `name`, `requestObject`, and
-`responseObject` are all missing. It is not a failure — it is a silent gap.
+The kube-apiserver **does** emit an audit event for aggregated API requests —
+but it is hollow (no `name`, no `requestObject`, no `responseObject`) because
+the request is proxied opaquely. The proxy fills the gap by observing both
+sides of the conversation. Two tabs, one obvious contrast.
 
-Tab B lights up with the complete picture because the proxy intercepts the request, observes both sides of the
-conversation, and re-emits a fully populated `audit.k8s.io/v1` event. That contrast — one tab with a hollow
-event, one tab with everything — is the value proposition of this tool, shown in five seconds without any
-explanation.
+The audit policy at [test/e2e/cluster/audit/policy.yaml](../test/e2e/cluster/audit/policy.yaml)
+deliberately does **not** suppress `wardle.example.com` — that hollow event
+is the point of the demo, and hiding it would hide the value proposition.
 
 ---
 
 ## Architecture
-
-### Component Map
 
 ```mermaid
 graph TB
@@ -85,320 +109,138 @@ graph TB
     WT -->|WebSocket live stream| T2
 ```
 
-### Traffic Lanes
-
-**Lane A — kube-apiserver native audit**
-
-```
-kube-apiserver
-  → audit policy: capture RequestResponse for write verbs (wardle.example.com included)
-  → webhook-config: server: https://127.0.0.1:30444/aabbccdd-0000-4000-0000-000000000001
-                    insecure-skip-tls-verify: true
-  → Traefik (NodePort 30444, TLS termination)
-  → webhook-tester POST /aabbccdd-...-000000000001
-  → stored in Session A
-  → event present: verb ✓  resource ✓  status ✓
-                   name ✗  requestObject ✗  responseObject ✗
-```
-
-**Lane B — proxy audit**
-
-```
-kubectl create flunder.wardle.example.com
-  → kube-apiserver (aggregated, transparent)
-  → apiservice-audit-proxy
-    → proxies to sample-apiserver
-    → intercepts request/response
-    → builds audit.k8s.io/v1 EventList
-  → webhook kubeconfig (auto-generated by Helm):
-      server: http://<wt-svc>.wardle.svc.cluster.local:8080/aabbccdd-0000-4000-0000-000000000002
-  → webhook-tester POST /aabbccdd-...-000000000002
-  → stored in Session B
-```
+Both lanes hit the same webhook-tester deployment in the cluster. Fixed UUIDs
+keep the browser URLs and the kube-apiserver audit webhook config stable
+across cluster recreations.
 
 ---
 
-## Files Changed
+## What is already in place
 
-### New files
+These are done — referenced for context in the step-by-step below.
 
-| File | Purpose |
-|---|---|
-| `test/e2e/cluster/audit/policy.yaml` | kube-apiserver audit policy. Captures `RequestResponse` for all write verbs, including `wardle.example.com` — so Lane A shows the hollow event the kube-apiserver produces. Filters out high-noise resources (events, leases, status subresources, tokenreviews). |
-| `test/e2e/cluster/audit/webhook-config.yaml` | kube-apiserver audit webhook bootstrap config. Points at `https://127.0.0.1:30444/<uuid-a>` with `insecure-skip-tls-verify: true`. |
-| `charts/apiservice-audit-proxy/templates/webhook-tester-deployment.yaml` | Helm template for the webhook-tester Deployment. |
-| `charts/apiservice-audit-proxy/templates/webhook-tester-service.yaml` | ClusterIP Service for webhook-tester. |
-| `charts/apiservice-audit-proxy/templates/webhook-tester-ingress.yaml` | Ingress (class: traefik) for browser access to webhook-tester UI. |
-| `charts/apiservice-audit-proxy/templates/webhook-tester-kubeconfig-secret.yaml` | Auto-generates the Secret named by `webhook.kubeconfigSecretName`, pointing the proxy's outbound webhook at webhook-tester Session B. |
-
-### Modified files
-
-| File | Change |
-|---|---|
-| `charts/apiservice-audit-proxy/values.yaml` | Added `webhookTester` block (disabled by default). Fixed tag: `2.3.0` not `v2.3.0`. Added `kubeApiserverSessionUUID` for NOTES display. |
-| `charts/apiservice-audit-proxy/templates/_helpers.tpl` | Added `webhookTester.fullname`, `webhookTester.selectorLabels`, `webhookTester.labels` helpers. |
-| `charts/apiservice-audit-proxy/templates/NOTES.txt` | Added conditional block showing both Lane A and Lane B browser URLs with a one-line explanation. |
-| `test/e2e/cluster/start-cluster.sh` | Merged Docker-outside-of-Docker path resolution (from gitops-reverser) and audit webhook auto-wiring. When `test/e2e/cluster/audit/` files are present, the cluster is created with `--kube-apiserver-arg` flags and volume mounts. Gracefully skips if files are absent. |
-| `test/e2e/setup/flux/releases/ingress.yaml` | Added `ports.websecure.nodePort: 30444` to Traefik Helm values. Gives kube-apiserver a stable NodePort to reach via `127.0.0.1:30444`. |
-| `.devcontainer/devcontainer.json` | Added `HOST_PROJECT_PATH: "${localWorkspaceFolder}"`. Required for Docker-outside-of-Docker setups where the Docker daemon's path differs from the container's `/workspaces/...` path. Takes effect after devcontainer rebuild. |
-
----
-
-## Key Design Decisions
-
-### Fixed UUIDs
-
-Both session UUIDs are fixed well-known values:
-
-- Lane A (kube-apiserver): `aabbccdd-0000-4000-0000-000000000001`
-- Lane B (proxy): `aabbccdd-0000-4000-0000-000000000002`
-
-This makes browser URLs predictable across cluster recreations and Helm upgrades. No querying the cluster to
-find the URL.
-
-### TLS: kube-apiserver requires HTTPS, proxy does not
-
-The kube-apiserver audit webhook spec only supports `https://` endpoints. The proxy's outbound webhook client
-is not constrained this way and uses plain `http://` in-cluster (shorter path, no cert management needed).
-
-For Lane A: Traefik's `websecure` entrypoint on fixed NodePort 30444 terminates TLS. The kube-apiserver uses
-`insecure-skip-tls-verify: true` to accept Traefik's default self-signed cert. This is the same pattern proven
-in the gitops-reverser project.
-
-For Lane B: direct plain HTTP to the webhook-tester ClusterIP Service. No Traefik hop needed.
-
-### Audit policy: wardle.example.com is NOT suppressed
-
-The audit policy deliberately does **not** add a `level: None` rule for `wardle.example.com`. The kube-apiserver
-will attempt to audit these requests at `RequestResponse` level — and it will produce an event. But because the
-kube-apiserver proxies the request opaquely, it cannot populate `name`, `requestObject`, or `responseObject`.
-The resulting event is structurally present but informationally hollow.
-
-That hollow event is the point of the demo. Suppressing it would hide the problem rather than illustrate it.
-
-### Audit webhook baked into cluster creation
-
-The kube-apiserver audit policy and webhook config are cluster-creation-time arguments. They cannot be injected
-after the fact via a Helm chart or `kubectl apply`. The right place for this is `start-cluster.sh`, which now
-conditionally mounts `test/e2e/cluster/audit/` into the k3d server node and passes the four `--kube-apiserver-arg`
-flags at creation time.
-
-The conditional (`audit_files_present`) means the cluster script degrades gracefully: if the audit files are not
-present (e.g., someone clones the repo without them), the cluster starts without audit webhook support rather than
-failing.
-
-### `HOST_PROJECT_PATH` for Docker-outside-of-Docker
-
-k3d volume mounts require a path visible to the Docker daemon. In a devcontainer using Docker-outside-of-Docker,
-the daemon sees the host filesystem (e.g., `/home/user/git/repo`), not the container's `/workspaces/...` path.
-The `start-cluster.sh` script calls `resolve_host_project_path`, which probes both `$(pwd -P)` and
-`$HOST_PROJECT_PATH` via a test Docker run to find which path the daemon can actually mount.
-
-The devcontainer now sets `HOST_PROJECT_PATH: "${localWorkspaceFolder}"` which resolves to the host-side
-workspace path at container build time. This requires a devcontainer rebuild to take effect.
-
-### webhook-tester image tag
-
-The public image is `ghcr.io/tarampampam/webhook-tester:2.3.0` — no `v` prefix. The `:2` floating tag resolves
-to the same digest and can be used if pinning to a minor release isn't required.
+- Helm chart wires `webhookTester.enabled=true` to deploy webhook-tester
+  (in-memory, `--auto-create-sessions`) and to **auto-generate** the Secret
+  named by `webhook.kubeconfigSecretName` pointing at Lane B
+  ([charts/.../webhook-tester-*.yaml](../charts/apiservice-audit-proxy/templates/),
+  [values.yaml](../charts/apiservice-audit-proxy/values.yaml)).
+- Helm `NOTES.txt` shows both Lane A and Lane B URLs side-by-side
+  ([NOTES.txt](../charts/apiservice-audit-proxy/templates/NOTES.txt)).
+- `start-cluster.sh` mounts `test/e2e/cluster/audit/` into the k3d server
+  node and passes the `--kube-apiserver-arg=audit-*` flags at creation time,
+  conditionally and with Docker-outside-of-Docker support
+  ([test/e2e/cluster/start-cluster.sh](../test/e2e/cluster/start-cluster.sh)).
+- Traefik exposes its `websecure` entrypoint on a fixed `nodePort: 30444`
+  so the kube-apiserver can reach Lane A via `https://127.0.0.1:30444`
+  ([test/e2e/setup/flux/releases/ingress.yaml](../test/e2e/setup/flux/releases/ingress.yaml)).
+- `TestAggregatedAPIAuditGap` asserts the contrast directly
+  ([test/e2e/audit_gap_test.go](../test/e2e/audit_gap_test.go)).
+- `TestSmoke` queries webhook-tester via the same shared helpers
+  ([test/e2e/smoke_test.go](../test/e2e/smoke_test.go),
+  [test/e2e/webhook_tester_test.go](../test/e2e/webhook_tester_test.go)).
+- Deployment template has a `checksum/webhook-kubeconfig` annotation so a
+  Secret-content change triggers a rolling restart of the proxy
+  ([charts/.../deployment.yaml](../charts/apiservice-audit-proxy/templates/deployment.yaml)).
 
 ---
 
-## Helm Usage
+## Step-by-step: retire `mock-audit-webhook`
 
-### Enable webhook-tester in the demo stack
+Each step is independently mergeable. Numbering is the recommended order — it
+keeps `task e2e:test-smoke` green at every checkpoint.
 
-```bash
-helm upgrade --install apiservice-audit-proxy ./charts/apiservice-audit-proxy \
-  --namespace wardle \
-  --create-namespace \
-  --values test/e2e/values/proxy-cert-manager.yaml \
-  --set image.repository=apiservice-audit-proxy \
-  --set image.tag=e2e-local \
-  --set webhookTester.enabled=true
-```
+### Step 1 — Remove the unused Taskfile + script + manifests
 
-When `webhookTester.enabled=true`, the chart:
+Nothing in the test suite calls these any more (verified by running
+`task e2e:test-smoke` and `task e2e:test-audit-gap` after the e2e:test-smoke
+fix landed). Safe to delete in one PR.
 
-1. Deploys webhook-tester (in-memory, `--auto-create-sessions`, port 8080).
-2. Creates an Ingress (class: traefik) for browser access.
-3. **Auto-generates** the Secret named by `webhook.kubeconfigSecretName` pointing at Lane B. No manual
-   `task e2e:prepare-webhook-kubeconfig` step needed.
+- [ ] Delete tasks from [Taskfile.e2e.yml](../Taskfile.e2e.yml):
+  `e2e:build-mock-webhook-image`, `e2e:load-mock-webhook-image`,
+  `e2e:deploy-mock-webhook`, `e2e:prepare-webhook-kubeconfig`,
+  `e2e:build-images`, `e2e:load-images`, `e2e:prepare`, `e2e:prepare-backend-ca`.
+- [ ] Delete vars: `E2E_WEBHOOK_IMAGE`, `E2E_WEBHOOK_NAMESPACE`,
+  `E2E_WEBHOOK_SERVICE_NAME`.
+- [ ] Delete [hack/e2e/write-webhook-kubeconfig.sh](../hack/e2e/write-webhook-kubeconfig.sh).
+- [ ] Delete [test/e2e/setup/manifests/mock-audit-webhook/](../test/e2e/setup/manifests/mock-audit-webhook/).
+- [ ] Drop `mock-webhook-update` resource from [Tiltfile](../Tiltfile).
+- [ ] Re-run: `task e2e:test-smoke && task e2e:test-image-refresh && task e2e:test-audit-gap`.
 
-### Access the UI
+**Verify**: `grep -rn 'mock-audit-webhook\|MOCK_WEBHOOK\|E2E_WEBHOOK_'` finds
+only Go sources, the Dockerfile, and historical docs.
 
-After deploying:
+### Step 2 — Delete the binary
 
-```bash
-kubectl port-forward -n wardle svc/apiservice-audit-proxy-webhook-tester 8080:8080
-```
+- [ ] `rm -rf cmd/mock-audit-webhook/`.
+- [ ] Drop `BINARY` build-arg from [Dockerfile](../Dockerfile); hardcode the
+  build target to `./cmd/server` and the entrypoint to
+  `/apiservice-audit-proxy`. (The artifact name `apiservice-audit-proxy`
+  is already the only one this image is published as.)
+- [ ] Re-run: `task lint && task test && task helm:lint && task e2e:test-smoke`.
 
-Then open two tabs:
+**Verify**: `docker build .` produces an image whose `ENTRYPOINT` is
+`/apiservice-audit-proxy` and there is no `--build-arg BINARY=` anywhere.
 
-| Tab | URL | Expected |
-|---|---|---|
-| Lane A | `http://localhost:8080/aabbccdd-0000-4000-0000-000000000001` | Event present but `name`, `requestObject`, `responseObject` all missing — the hollow record kube-apiserver produces |
-| Lane B | `http://localhost:8080/aabbccdd-0000-4000-0000-000000000002` | Full event with name, request body, and response body — what the proxy adds |
+### Step 3 — Clean up docs
 
----
+- [ ] In [docs/ARCHITECTURE.md](ARCHITECTURE.md), [docs/ascii-art-diagram.md](ascii-art-diagram.md),
+  and [AGENTS.md](../AGENTS.md): replace `mock-audit-webhook` references with
+  `webhook-tester` (or remove the section if it described the old layout).
+- [ ] Delete [docs/WORK-demo-stack.md](WORK-demo-stack.md) — it is fully
+  superseded:
+  - "Phase 1b mockAuditWebhook Helm sub-deployment" is moot (the binary is gone).
+  - "Phase 2 SSE + embedded HTML UI" was the case for *not* using
+    webhook-tester; we picked webhook-tester instead.
+  - "Phase 3 separate-repo decision" was contingent on Phase 2 shipping; n/a now.
+  - The only piece worth preserving — "testApiserver as optional Helm
+    sub-deployment (Phase 1a)" — should move into a new tiny WORK plan if
+    we still want it. (It is still wishlist; see [docs/STATUS.md](STATUS.md).)
+- [ ] In [docs/STATUS.md](STATUS.md): mark Step 1–3 done, drop W1.
+- [ ] Update [README.md](../README.md) so the demo path is `helm install ...
+  --set webhookTester.enabled=true`, not the old kustomize+mock flow.
 
-## Validation Results
+### Step 4 — Make `webhookTester.enabled=true` the default e2e path
 
-Validated on a fresh k3d cluster (`task e2e:cluster-up` equivalent with `HOST_PROJECT_PATH` set).
+The Tiltfile's main `e2e-prepare` resource and the new default for
+`task e2e:prepare-…` should deploy with webhook-tester on. After Steps 1–2,
+`task e2e:test-smoke` already does this; this step is just bringing the
+human-facing dev workflow in line.
 
-### kube-apiserver audit flags confirmed
+- [ ] Either (a) reintroduce a slim `e2e:prepare` that calls `e2e:load-image`
+  + `e2e:deploy-with-webhook-tester`, or (b) update the Tiltfile to call
+  those two directly. Pick one consistently.
+- [ ] Document in [README.md](../README.md): "to bring up the demo locally,
+  run `task e2e:cluster-up && task e2e:test-audit-gap`".
 
-```
-$ docker exec k3d-audit-pass-through-e2e-server-0 ps aux | grep -o 'audit[^ ]*'
-audit-policy-file=/etc/kubernetes/audit/policy.yaml
-audit-webhook-batch-max-size=10
-audit-webhook-batch-max-wait=1s
-audit-webhook-config-file=/etc/kubernetes/audit/webhook-config.yaml
-```
+### Step 5 — CI
 
-### The side-by-side contrast
+The current [.github/workflows/ci.yml](../.github/workflows/ci.yml) already
+publishes only the proxy image. Once Step 2 lands, the `BINARY` arg is gone
+and there is nothing to do here. Worth a sanity-check pass:
 
-After `kubectl apply` of a `Flunder` (wardle.example.com write):
+- [ ] Confirm `e2e-smoke` job still passes against the simplified flow.
+- [ ] Confirm no `mock-webhook` image is referenced in CI cache scopes or
+  publish steps.
 
-```
-Lane A — kube-apiserver native audit  [1 batch, 1 event]
-  verb=create  resource=flunders  name=None  status=201
-    requestObject:  *** MISSING ***
-    responseObject: *** MISSING ***
+### Step 6 — Release notes
 
-Lane B — apiservice-audit-proxy  [1 batch, 1 event]
-  verb=create  resource=flunders  name=demo-contrast  status=201
-    requestObject:  present (384 chars)
-    responseObject: present (818 chars)
-```
-
-**Lane A is not silent — it is hollow.** The kube-apiserver sees the HTTP transaction and produces an audit
-event, but because it proxies the request opaquely it cannot populate `name`, `requestObject`, or
-`responseObject`. The event exists but carries no actionable information about what the user actually created.
-
-**Lane B is complete.** The proxy intercepts both sides of the conversation and emits a fully populated event.
-
-This is the gap. It is not a kube-apiserver bug — it is a structural limitation of how aggregated API servers
-work. The audit trail for those resources can only be complete if something at the proxy boundary observes and
-records the interaction.
-
-### Traefik → webhook-tester (Lane A path) confirmed live
-
-Lane A received multiple batches of regular Kubernetes write events (services, configmaps, etc.) throughout the
-test run — confirming the full `kube-apiserver → Traefik NodePort 30444 → webhook-tester` path is operational.
-
-### webhook-tester startup log
-
-```json
-{"level":"info","msg":"HTTP server starting","address":"0.0.0.0","port":8080,"storage":"memory","pubsub":"memory"}
-```
-
-Clean startup, no errors.
-
-### kube-apiserver logs
-
-No audit webhook errors. The `--audit-webhook-batch-max-wait=1s` setting ensures events arrive within one second
-of the request completing, which is acceptable for a demo setup.
+- [ ] Conventional-commit `feat!:` or `refactor!:` prefix to surface the
+  removal of the binary in the next release-please PR. Body should call out
+  that anyone consuming `ghcr.io/configbutler/apiservice-audit-proxy` is
+  unaffected; only consumers building a custom image with
+  `--build-arg BINARY=mock-audit-webhook` need to migrate (which is
+  effectively zero people — it was never published).
 
 ---
 
-## How webhook-tester Routes Incoming Webhooks
+## Future (out of scope for this plan)
 
-From `internal/http/middleware/webhook/middleware.go` in the cloned source at
-`external-resources/webhook-tester/`:
-
-```go
-func shouldCaptureRequest(r *http.Request) (string, bool) {
-    clean := strings.TrimLeft(r.URL.Path, "/")
-    if len(clean) >= openapi.UUIDLength && openapi.IsValidUUID(clean[:openapi.UUIDLength]) {
-        return clean[:openapi.UUIDLength], true
-    }
-    return "", false
-}
-```
-
-Any request whose path starts with a valid UUID is captured into that session. The rest of the path is ignored.
-`--auto-create-sessions` means a POST to a non-existent UUID creates the session on the spot with a 200 default
-response. No init job, no pre-call, no ordering dependency.
-
----
-
-## webhook-tester API Assessment
-
-Source: `external-resources/webhook-tester/api/openapi.yml`
-
-| Capability | Available | Notes |
-|---|---|---|
-| Receive any POST body | ✅ | Any content-type, any path under `/<uuid>` |
-| In-memory storage | ✅ | Default driver, no external dependency |
-| List captured requests | ✅ | `GET /api/session/<uuid>/requests` |
-| Get single request | ✅ | `GET /api/session/<uuid>/requests/<req-uuid>` |
-| Delete session / requests | ✅ | `DELETE /api/session/<uuid>` |
-| Live browser UI | ✅ | Served at `/` |
-| WebSocket live updates | ✅ | `GET /api/session/<uuid>/requests/subscribe` |
-| Auto-create sessions | ✅ | `--auto-create-sessions` flag |
-| Kubernetes audit event awareness | ❌ | Raw JSON only, no structured display |
-| Configurable response code | ✅ | Set per session; can also be overridden in URL path |
-| Health / readiness probes | ✅ | `/healthz`, `/ready` |
-
-Captured bodies are stored as base64 in `request_payload_base64`. The browser UI decodes and pretty-prints
-automatically.
-
----
-
-## e2e Test: TestAggregatedAPIAuditGap
-
-`test/e2e/audit_gap_test.go` is a purpose-built test that asserts the "why" of the proxy. It runs against the
-live cluster using both webhook-tester sessions.
-
-```
-task e2e:test-audit-gap
-```
-
-The test creates a Flunder and then makes two assertions in sequence:
-
-**`LaneB_proxy_event_is_complete`** — the proxy's event must have all three fields:
-- `name` matches the created resource
-- `requestObject` is present
-- `responseObject` is present
-
-**`LaneA_kube_apiserver_event_is_hollow`** — the kube-apiserver's event must be missing all three fields.
-These assertions are *inverted*: the test **passes** when the fields are absent, and **fails** with an
-explanatory message when they are present.
-
-Sample output from a passing run:
-
-```
-=== RUN   TestAggregatedAPIAuditGap/LaneB_proxy_event_is_complete
-    Lane B: name="audit-gap-1776961237" requestObject=383 chars responseObject=791 chars
-=== RUN   TestAggregatedAPIAuditGap/LaneA_kube_apiserver_event_is_hollow
-    Lane A: event found — verb=create resource=flunders status=201 (checking for missing fields...)
-    Lane A: name is absent (expected — kube-apiserver cannot resolve it through the proxy)
-    Lane A: requestObject is absent (expected — kube-apiserver cannot decode aggregated types)
-    Lane A: responseObject is absent (expected — kube-apiserver cannot decode aggregated types)
---- PASS: TestAggregatedAPIAuditGap (7.38s)
-```
-
-If a future Kubernetes version closes the gap natively, the `LaneA_kube_apiserver_event_is_hollow` sub-test
-will fail with a message explaining what changed and prompting a review of whether the proxy is still needed.
-The test is intentionally written so that failure on Lane A is *good news*, not a regression.
-
----
-
-## Phase 3 — Decision: retire mock-audit-webhook?
-
-**Trigger**: Phases 1 and 2 are working and the demo has been run at least once end-to-end. ✅ Met.
-
-**What to assess:**
-
-- Audit the current e2e assertions against `mock-audit-webhook`.
-- Prototype one test case using `GET /api/session/<uuid>/requests` + base64 decode.
-- If feasible: migrate all e2e assertions, remove `mock-audit-webhook` binary and Dockerfile target.
-- If not feasible (e.g., latency, body size limits, assertion complexity): keep both.
-
-webhook-tester's `GET /api/session/<uuid>/requests` returns a JSON array of captured requests. Each entry has
-`request_payload_base64` containing the full `audit.k8s.io/v1 EventList`. Assertions are straightforward:
-fetch → decode → `json.Unmarshal` → assert on event fields.
-
-The main difference from `mock-audit-webhook` is that the session model requires knowing the UUID upfront. Since
-the UUIDs are fixed constants, this is trivial to wire into test helpers.
+- **Schema-aware audit viewer**: if a Kubernetes-audit-aware UI ever becomes
+  worth building, it should be a separate repo (e.g. `audit-event-viewer`)
+  consuming webhook-tester's API or running as its own receiver. This was
+  the WORK-demo-stack Phase 3 question; the answer is now "yes, but not
+  yet, and not here."
+- **`testApiserver` as optional Helm sub-deployment**: still a real wishlist
+  item — would let `helm install --set testApiserver.enabled=true
+  --set webhookTester.enabled=true` produce a complete demo from the chart
+  alone. Captured in [docs/STATUS.md](STATUS.md#wishlist-with-concrete-how-to).

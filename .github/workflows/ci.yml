@@ -15,7 +15,7 @@ env:
   CI_CACHE_SCOPE: apiservice-audit-proxy-ci
   DEV_CACHE_SCOPE: apiservice-audit-proxy-devcontainer
   IMAGE_CACHE_SCOPE: apiservice-audit-proxy-image
-  CI_WORKDIR: /workspaces/apiservice-audit-proxy
+  CI_WORKDIR: /workspaces/${{ github.event.repository.name }}
 
 permissions:
   contents: write
