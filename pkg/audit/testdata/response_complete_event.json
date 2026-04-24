@@ -4,8 +4,6 @@
   "metadata": {},
   "items": [
     {
-      "apiVersion": "audit.k8s.io/v1",
-      "kind": "Event",
       "level": "RequestResponse",
       "auditID": "audit-123",
       "stage": "ResponseComplete",
@@ -38,10 +36,7 @@
         "resourceVersion": "7"
       },
       "responseStatus": {
-        "apiVersion": "v1",
-        "kind": "Status",
         "metadata": {},
-        "status": "Success",
         "code": 201
       },
       "requestObject": {

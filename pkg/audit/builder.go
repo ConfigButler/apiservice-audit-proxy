@@ -64,10 +64,6 @@ func (b *Builder) Build(input Input) (*v1.Event, error) {
 	responseMeta := decodeObjectMeta(input.ResponseBody)
 
 	event := &v1.Event{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "audit.k8s.io/v1",
-			Kind:       "Event",
-		},
 		Level:                    v1.LevelRequestResponse,
 		AuditID:                  b.auditIDFromRequest(input.Request),
 		Stage:                    v1.StageResponseComplete,
@@ -179,20 +175,7 @@ func buildResponseStatus(code int, body []byte) *metav1.Status {
 		return &status
 	}
 
-	result := &metav1.Status{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "v1",
-			Kind:       "Status",
-		},
-		Code: int32(code), //nolint:gosec
-	}
-	if code >= http.StatusOK && code < http.StatusBadRequest {
-		result.Status = metav1.StatusSuccess
-	} else {
-		result.Status = metav1.StatusFailure
-	}
-
-	return result
+	return &metav1.Status{Code: int32(code)} //nolint:gosec
 }
 
 type objectMeta struct {

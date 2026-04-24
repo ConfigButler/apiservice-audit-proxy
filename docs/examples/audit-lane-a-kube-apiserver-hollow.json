@@ -1,0 +1,46 @@
+{
+  "apiVersion": "audit.k8s.io/v1",
+  "kind": "EventList",
+  "metadata": {},
+  "items": [
+    {
+      "level": "RequestResponse",
+      "auditID": "0342eca7-d6ec-4347-badc-139f1ef1dca2",
+      "stage": "ResponseComplete",
+      "requestURI": "/apis/wardle.example.com/v1alpha1/namespaces/default/flunders?fieldManager=kubectl-client-side-apply&fieldValidation=Strict",
+      "verb": "create",
+      "user": {
+        "username": "system:admin",
+        "groups": [
+          "system:masters",
+          "system:authenticated"
+        ],
+        "extra": {
+          "authentication.kubernetes.io/credential-id": [
+            "X509SHA256=97f229887f87f3b3c424c9ab9e3a3ce2bd6e6c241d0611c2bd69230ce9ed418f"
+          ]
+        }
+      },
+      "sourceIPs": [
+        "172.20.0.6"
+      ],
+      "userAgent": "kubectl/v1.35.3 (linux/amd64) kubernetes/6c1cd99",
+      "objectRef": {
+        "resource": "flunders",
+        "namespace": "default",
+        "apiGroup": "wardle.example.com",
+        "apiVersion": "v1alpha1"
+      },
+      "responseStatus": {
+        "metadata": {},
+        "code": 201
+      },
+      "requestReceivedTimestamp": "2026-04-24T12:03:46.310706Z",
+      "stageTimestamp": "2026-04-24T12:03:46.320716Z",
+      "annotations": {
+        "authorization.k8s.io/decision": "allow",
+        "authorization.k8s.io/reason": ""
+      }
+    }
+  ]
+}

@@ -1,0 +1,91 @@
+{
+  "apiVersion": "audit.k8s.io/v1",
+  "kind": "EventList",
+  "metadata": {},
+  "items": [
+    {
+      "level": "RequestResponse",
+      "auditID": "0342eca7-d6ec-4347-badc-139f1ef1dca2",
+      "stage": "ResponseComplete",
+      "requestURI": "/apis/wardle.example.com/v1alpha1/namespaces/default/flunders?fieldManager=kubectl-client-side-apply&fieldValidation=Strict",
+      "verb": "create",
+      "user": {
+        "username": "system:admin",
+        "groups": [
+          "system:masters",
+          "system:authenticated"
+        ],
+        "extra": {
+          "authentication.kubernetes.io/credential-id": [
+            "X509SHA256=97f229887f87f3b3c424c9ab9e3a3ce2bd6e6c241d0611c2bd69230ce9ed418f"
+          ]
+        }
+      },
+      "sourceIPs": [
+        "172.20.0.6",
+        "10.42.2.0"
+      ],
+      "userAgent": "kubectl/v1.35.3 (linux/amd64) kubernetes/6c1cd99",
+      "objectRef": {
+        "resource": "flunders",
+        "namespace": "default",
+        "name": "audit-gap-1777032226",
+        "uid": "b1717f32-9f27-42e8-bb6a-7cbc72ab38a3",
+        "apiGroup": "wardle.example.com",
+        "apiVersion": "v1alpha1",
+        "resourceVersion": "22"
+      },
+      "responseStatus": {
+        "metadata": {},
+        "code": 201
+      },
+      "requestObject": {
+        "apiVersion": "wardle.example.com/v1alpha1",
+        "kind": "Flunder",
+        "metadata": {
+          "annotations": {
+            "kubectl.kubernetes.io/last-applied-configuration": "{\"apiVersion\":\"wardle.example.com/v1alpha1\",\"kind\":\"Flunder\",\"metadata\":{\"annotations\":{},\"name\":\"audit-gap-1777032226\",\"namespace\":\"default\"},\"spec\":{}}\n"
+          },
+          "name": "audit-gap-1777032226",
+          "namespace": "default"
+        },
+        "spec": {}
+      },
+      "responseObject": {
+        "kind": "Flunder",
+        "apiVersion": "wardle.example.com/v1alpha1",
+        "metadata": {
+          "name": "audit-gap-1777032226",
+          "namespace": "default",
+          "uid": "b1717f32-9f27-42e8-bb6a-7cbc72ab38a3",
+          "resourceVersion": "22",
+          "creationTimestamp": "2026-04-24T12:03:46Z",
+          "annotations": {
+            "kubectl.kubernetes.io/last-applied-configuration": "{\"apiVersion\":\"wardle.example.com/v1alpha1\",\"kind\":\"Flunder\",\"metadata\":{\"annotations\":{},\"name\":\"audit-gap-1777032226\",\"namespace\":\"default\"},\"spec\":{}}\n"
+          },
+          "managedFields": [
+            {
+              "manager": "kubectl-client-side-apply",
+              "operation": "Update",
+              "apiVersion": "wardle.example.com/v1alpha1",
+              "time": "2026-04-24T12:03:46Z",
+              "fieldsType": "FieldsV1",
+              "fieldsV1": {
+                "f:metadata": {
+                  "f:annotations": {
+                    ".": {},
+                    "f:kubectl.kubernetes.io/last-applied-configuration": {}
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "spec": {},
+        "status": {}
+      },
+      "requestReceivedTimestamp": "2026-04-24T12:03:46.311589Z",
+      "stageTimestamp": "2026-04-24T12:03:46.320380Z"
+    }
+  ]
+}
