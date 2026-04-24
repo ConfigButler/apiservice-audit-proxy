@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -154,17 +155,47 @@ func currentProxyPodName(t *testing.T, kubectlCtx, namespace string) string {
 		"kubectl", "--context", kubectlCtx,
 		"-n", namespace, "get", "pods",
 		"-l", proxySelector,
-		"--field-selector=status.phase=Running",
-		"-o", "jsonpath={.items[0].metadata.name}",
+		"-o", "json",
 	).Output()
 	if err != nil {
 		t.Fatalf("get proxy pod name: %v", err)
 	}
-	name := strings.TrimSpace(string(out))
-	if name == "" {
+
+	var podList struct {
+		Items []struct {
+			Metadata struct {
+				Name              string  `json:"name"`
+				CreationTimestamp string  `json:"creationTimestamp"`
+				DeletionTimestamp *string `json:"deletionTimestamp"`
+			} `json:"metadata"`
+			Status struct {
+				Phase string `json:"phase"`
+			} `json:"status"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(out, &podList); err != nil {
+		t.Fatalf("parse proxy pod list: %v", err)
+	}
+
+	var newestName string
+	var newestCreated time.Time
+	for _, pod := range podList.Items {
+		if pod.Status.Phase != "Running" || pod.Metadata.DeletionTimestamp != nil {
+			continue
+		}
+		created, err := time.Parse(time.RFC3339, pod.Metadata.CreationTimestamp)
+		if err != nil {
+			t.Fatalf("parse creation timestamp for pod %s: %v", pod.Metadata.Name, err)
+		}
+		if newestName == "" || created.After(newestCreated) {
+			newestName = pod.Metadata.Name
+			newestCreated = created
+		}
+	}
+	if newestName == "" {
 		t.Fatal("no running proxy pod found")
 	}
-	return name
+	return newestName
 }
 
 func proxyPodImageID(t *testing.T, kubectlCtx, namespace, podName string) string {

@@ -17,7 +17,10 @@ vars:
   IMAGE_REPOSITORY: '{{.IMAGE_REPOSITORY | default "apiservice-audit-proxy"}}'
   IMAGE_TAG: '{{.IMAGE_TAG | default "dev"}}'
   CHART_DIR: charts/apiservice-audit-proxy
+  CHART_VERSION:
+    sh: awk '/^version:/ { print $2; exit }' charts/apiservice-audit-proxy/Chart.yaml
   DIST_DIR: dist
+  BUILD_STAMPS_DIR: .stamps/build
   RELEASE_NAME: '{{.RELEASE_NAME | default "apiservice-audit-proxy"}}'
   RELEASE_NAMESPACE: '{{.RELEASE_NAMESPACE | default "audit-pass-through-system"}}'
 
@@ -64,19 +67,46 @@ tasks:
 
   test:
     desc: Run unit tests with coverage
+    sources:
+      - cmd/**/*.go
+      - pkg/**/*.go
+      - go.mod
+      - go.sum
+    generates:
+      - coverage.out
     cmds:
       - go test ./... -coverprofile=coverage.out
 
   build:
     desc: Build the server binary
+    sources:
+      - cmd/**/*.go
+      - pkg/**/*.go
+      - go.mod
+      - go.sum
+    generates:
+      - bin/{{.APP_NAME}}
     cmds:
       - mkdir -p bin
       - go build -o bin/{{.APP_NAME}} ./cmd/server
 
   docker-build:
     desc: Build the local container image
+    sources:
+      - Dockerfile
+      - cmd/**/*.go
+      - pkg/**/*.go
+      - go.mod
+      - go.sum
+    generates:
+      - '{{.BUILD_STAMPS_DIR}}/docker-image.id'
+    status:
+      - '{{.DOCKER | default "docker"}} image inspect "{{.IMAGE_REPOSITORY}}:{{.IMAGE_TAG}}" >/dev/null 2>&1'
+      - test "$(cat "{{.BUILD_STAMPS_DIR}}/docker-image.id" 2>/dev/null)" = "$({{.DOCKER | default "docker"}} image inspect --format='{{"{{"}}.Id{{"}}"}}' "{{.IMAGE_REPOSITORY}}:{{.IMAGE_TAG}}")"
     cmds:
-      - docker build -t {{.IMAGE_REPOSITORY}}:{{.IMAGE_TAG}} .
+      - '{{.DOCKER | default "docker"}} build -t {{.IMAGE_REPOSITORY}}:{{.IMAGE_TAG}} .'
+      - mkdir -p {{.BUILD_STAMPS_DIR}}
+      - '{{.DOCKER | default "docker"}} image inspect --format=''{{"{{"}}.Id{{"}}"}}'' "{{.IMAGE_REPOSITORY}}:{{.IMAGE_TAG}}" > {{.BUILD_STAMPS_DIR}}/docker-image.id'
 
   helm:lint:
     desc: Lint the Helm chart
@@ -90,22 +120,42 @@ tasks:
 
   helm:package:
     desc: Package the Helm chart into dist/
+    sources:
+      - '{{.CHART_DIR}}/**'
+    generates:
+      - '{{.DIST_DIR}}/apiservice-audit-proxy-{{.CHART_VERSION}}.tgz'
     cmds:
       - mkdir -p {{.DIST_DIR}}
       - helm package {{.CHART_DIR}} --destination {{.DIST_DIR}}
 
   dist:
     desc: Build release artifacts in dist/
+    sources:
+      - '{{.CHART_DIR}}/**'
+    generates:
+      - '{{.DIST_DIR}}/apiservice-audit-proxy-{{.CHART_VERSION}}.tgz'
+      - '{{.DIST_DIR}}/checksums.txt'
     cmds:
       - task: helm:package
       - sha256sum {{.DIST_DIR}}/*.tgz > {{.DIST_DIR}}/checksums.txt
 
   ci:
     desc: Run the local CI-equivalent checks
+    deps:
+      - fmt:check
+      - lint
+      - test
+      - helm:lint
     cmds:
-      - task: fmt:check
-      - task: lint
-      - task: test
       - task: build
-      - task: helm:lint
       - task: dist
+
+  clean-stamps:
+    desc: Forget cached Task readiness stamps
+    cmds:
+      - rm -rf .stamps/
+
+  clean:
+    desc: Remove build artifacts, release artifacts, coverage, and local Task caches
+    cmds:
+      - rm -rf bin/ coverage.out dist/ .task/ .stamps/

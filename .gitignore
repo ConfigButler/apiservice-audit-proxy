@@ -1,6 +1,7 @@
 bin/
 coverage.out
 dist/
+.task/
 .stamps/
 external-resources/
 *.env
