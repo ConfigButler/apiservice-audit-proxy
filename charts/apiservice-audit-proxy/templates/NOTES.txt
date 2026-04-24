@@ -15,6 +15,20 @@ Example:
     --set backend.url=https://sample-apiserver.wardle.svc:443 \
     --set webhook.kubeconfigSecretName=audit-pass-through-webhook-kubeconfig \
     --set certificates.mode=dev-self-signed
+{{- if .Values.testApiserver.enabled }}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Test API Server — demo backend:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The chart rendered the Wardle sample-apiserver Service:
+
+  https://{{ include "apiservice-audit-proxy.testApiserver.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.testApiserver.service.port | int }}
+
+For a complete demo install, use values-demo.yaml so backend.url,
+backend.clientCertSecretName, apiService.enabled, and webhookTester.enabled are
+set explicitly together.
+{{- end }}
 {{- if .Values.webhookTester.enabled }}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

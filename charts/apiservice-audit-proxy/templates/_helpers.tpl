@@ -158,6 +158,60 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
 {{/*
+testApiserver resource names and labels.
+*/}}
+{{- define "apiservice-audit-proxy.testApiserver.fullname" -}}
+{{- default (printf "%s-test-apiserver" (include "apiservice-audit-proxy.fullname" .)) .Values.testApiserver.nameOverride | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{- define "apiservice-audit-proxy.testApiserver.serviceAccountName" -}}
+{{- default (include "apiservice-audit-proxy.testApiserver.fullname" .) .Values.testApiserver.serviceAccount.name | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{- define "apiservice-audit-proxy.testApiserver.selectorLabels" -}}
+app.kubernetes.io/name: sample-apiserver
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: test-apiserver
+{{- end }}
+
+{{- define "apiservice-audit-proxy.testApiserver.labels" -}}
+helm.sh/chart: {{ include "apiservice-audit-proxy.chart" . }}
+{{ include "apiservice-audit-proxy.testApiserver.selectorLabels" . }}
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
+
+{{- define "apiservice-audit-proxy.testApiserver.rbacName" -}}
+{{- printf "%s-test-apiserver" (include "apiservice-audit-proxy.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{- define "apiservice-audit-proxy.testApiserver.authDelegatorBindingName" -}}
+{{- printf "%s-test-apiserver-auth-delegator" (include "apiservice-audit-proxy.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{- define "apiservice-audit-proxy.testApiserver.authReaderBindingName" -}}
+{{- printf "%s-test-apiserver-auth-reader" (include "apiservice-audit-proxy.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{- define "apiservice-audit-proxy.testApiserver.selfSignedIssuerName" -}}
+{{- default (printf "%s-backend-selfsigned" (include "apiservice-audit-proxy.fullname" .)) .Values.testApiserver.backendClientCert.selfSignedIssuerName | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{- define "apiservice-audit-proxy.testApiserver.clientCASecretName" -}}
+{{- default (printf "%s-backend-client-ca" (include "apiservice-audit-proxy.fullname" .)) .Values.testApiserver.backendClientCert.caSecretName | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{- define "apiservice-audit-proxy.testApiserver.clientCAIssuerName" -}}
+{{- default (printf "%s-backend-client-ca" (include "apiservice-audit-proxy.fullname" .)) .Values.testApiserver.backendClientCert.caIssuerName | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{- define "apiservice-audit-proxy.testApiserver.clientCertSecretName" -}}
+{{- default (printf "%s-backend-client-cert" (include "apiservice-audit-proxy.fullname" .)) .Values.testApiserver.backendClientCert.clientSecretName | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
 Standard volume paths.
 */}}
 {{- define "apiservice-audit-proxy.paths.webhook" -}}/var/run/audit-pass-through/webhook{{- end }}

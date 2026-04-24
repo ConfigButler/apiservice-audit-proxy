@@ -35,10 +35,7 @@ vars:
       else
         printf '%s' "${tag}"
       fi
-  E2E_WEBHOOK_IMAGE: '{{.E2E_WEBHOOK_IMAGE | default "audit-pass-through-mock-audit-webhook:e2e-local"}}'
   E2E_PROXY_NAMESPACE: '{{.E2E_PROXY_NAMESPACE | default "wardle"}}'
-  E2E_WEBHOOK_NAMESPACE: '{{.E2E_WEBHOOK_NAMESPACE | default "audit-pass-through-e2e"}}'
-  E2E_WEBHOOK_SERVICE_NAME: '{{.E2E_WEBHOOK_SERVICE_NAME | default "audit-pass-through-mock-audit-webhook"}}'
   E2E_RELEASE_NAME: '{{.E2E_RELEASE_NAME | default "apiservice-audit-proxy"}}'
   E2E_BACKEND_MANIFEST_DIR: '{{.E2E_BACKEND_MANIFEST_DIR | default "test/e2e/setup/manifests/sample-apiserver"}}'
   E2E_PROXY_VALUES_FILE: '{{.E2E_PROXY_VALUES_FILE | default "test/e2e/values/proxy-cert-manager.yaml"}}'
@@ -79,49 +76,16 @@ tasks:
     cmds:
       - task: e2e:_proxy-image-built
 
-  e2e:build-mock-webhook-image:
-    desc: Build the mock audit webhook image used for local e2e
-    cmds:
-      - task: e2e:_mock-webhook-image-built
-
-  e2e:build-images:
-    desc: Build both local e2e images
-    deps:
-      - e2e:build-image
-      - e2e:build-mock-webhook-image
-
   e2e:load-image:
     desc: Load the proxy image into the k3d cluster
     cmds:
       - task: e2e:build-image
       - task: e2e:_proxy-image-loaded
 
-  e2e:load-mock-webhook-image:
-    desc: Load the mock audit webhook image into the k3d cluster
-    cmds:
-      - task: e2e:build-mock-webhook-image
-      - task: e2e:_mock-webhook-image-loaded
-
-  e2e:load-images:
-    desc: Load both local e2e images into the cluster
-    deps:
-      - e2e:load-image
-      - e2e:load-mock-webhook-image
-
-  e2e:deploy-mock-webhook:
-    desc: Deploy the in-cluster mock audit webhook receiver
-    cmds:
-      - task: e2e:_mock-webhook-deployed
-
   e2e:deploy-backend:
     desc: Deploy the sample aggregated backend and its backend client cert wiring
     cmds:
       - task: e2e:_backend-deployed
-
-  e2e:prepare-webhook-kubeconfig:
-    desc: Create the Secret consumed by the proxy for outbound webhook delivery
-    cmds:
-      - task: e2e:_webhook-kubeconfig-written
 
   e2e:prepare-requestheader-client-ca:
     desc: Copy the cluster requestheader client CA into the proxy namespace for secure delegated identity trust
@@ -129,9 +93,9 @@ tasks:
       - task: e2e:_requestheader-ca-copied
 
   e2e:deploy-proxy:
-    desc: Install the pass-through proxy with cert-manager-backed serving TLS
+    desc: Install the pass-through proxy with cert-manager-backed serving TLS and webhook-tester
     cmds:
-      - task: e2e:_proxy-installed
+      - task: e2e:_proxy-with-webhook-tester-installed
 
   e2e:prepare:
     desc: Build, load, and install the full standalone smoke environment
@@ -152,7 +116,7 @@ tasks:
   e2e:test-smoke-backend-ca:
     desc: Run the smoke scenario with backend TLS validated by an explicit CA bundle
     cmds:
-      - task: e2e:deploy-with-webhook-tester
+      - task: e2e:_proxy-with-webhook-tester-installed
         vars:
           E2E_BACKEND_MANIFEST_DIR: test/e2e/setup/manifests/sample-apiserver-backend-ca
           E2E_PROXY_VALUES_FILE: test/e2e/values/proxy-cert-manager-backend-ca.yaml
@@ -292,26 +256,6 @@ tasks:
       - "{{.DOCKER}} build -t {{.E2E_PROXY_IMAGE}} ."
       - '{{.DOCKER}} image inspect --format=''{{"{{"}}.Id{{"}}"}}'' "{{.E2E_PROXY_IMAGE}}" > {{.STAMPS_DIR}}/proxy-image-build.id'
 
-  e2e:_mock-webhook-image-built:
-    method: checksum
-    sources:
-      - Dockerfile
-      - cmd/**/*.go
-      - pkg/**/*.go
-      - go.mod
-      - go.sum
-      - exclude: cmd/**/*_test.go
-      - exclude: pkg/**/*_test.go
-    generates:
-      - '{{.STAMPS_DIR}}/mock-webhook-image-build.id'
-    status:
-      - '{{.DOCKER}} image inspect "{{.E2E_WEBHOOK_IMAGE}}" >/dev/null 2>&1'
-      - test "$(cat "{{.STAMPS_DIR}}/mock-webhook-image-build.id" 2>/dev/null)" = "$({{.DOCKER}} image inspect --format='{{"{{"}}.Id{{"}}"}}' "{{.E2E_WEBHOOK_IMAGE}}")"
-    cmds:
-      - mkdir -p {{.STAMPS_DIR}}
-      - "{{.DOCKER}} build --build-arg BINARY=mock-audit-webhook -t {{.E2E_WEBHOOK_IMAGE}} ."
-      - '{{.DOCKER}} image inspect --format=''{{"{{"}}.Id{{"}}"}}'' "{{.E2E_WEBHOOK_IMAGE}}" > {{.STAMPS_DIR}}/mock-webhook-image-build.id'
-
   e2e:_proxy-image-loaded:
     method: timestamp
     sources:
@@ -338,51 +282,7 @@ tasks:
         export DOCKER="{{.DOCKER}}"
         export STAMP_FILE="{{.STAMPS_DIR}}/proxy-image.stamp"
         bash hack/e2e/load-image.sh
-      - rm -f {{.STAMPS_DIR}}/proxy.installed {{.STAMPS_DIR}}/proxy-webhook-tester.installed
-
-  e2e:_mock-webhook-image-loaded:
-    method: timestamp
-    sources:
-      - Dockerfile
-      - cmd/**/*.go
-      - pkg/**/*.go
-      - go.mod
-      - go.sum
-      - exclude: cmd/**/*_test.go
-      - exclude: pkg/**/*_test.go
-    generates:
-      - '{{.STAMPS_DIR}}/mock-webhook-image.stamp'
-    status:
-      - '{{.DOCKER}} image inspect "{{.E2E_WEBHOOK_IMAGE}}" >/dev/null 2>&1'
-      - case "$(cat "{{.STAMPS_DIR}}/mock-webhook-image.stamp" 2>/dev/null)" in "{{.E2E_WEBHOOK_IMAGE}}"@*) exit 0 ;; *) exit 1 ;; esac
-      - '{{.K3D}} cluster list -o json 2>/dev/null | grep -q "\"name\":\"{{.CLUSTER_NAME}}\""'
-    cmds:
-      - task: e2e:_cluster-ready
-      - mkdir -p {{.STAMPS_DIR}}
-      - |
-        export CLUSTER_NAME="{{.CLUSTER_NAME}}"
-        export IMAGE="{{.E2E_WEBHOOK_IMAGE}}"
-        export K3D="{{.K3D}}"
-        export DOCKER="{{.DOCKER}}"
-        export STAMP_FILE="{{.STAMPS_DIR}}/mock-webhook-image.stamp"
-        bash hack/e2e/load-image.sh
-      - rm -f {{.STAMPS_DIR}}/mock-webhook.deployed {{.STAMPS_DIR}}/webhook-kubeconfig.applied {{.STAMPS_DIR}}/proxy.installed
-
-  e2e:_mock-webhook-deployed:
-    method: timestamp
-    sources:
-      - '{{.STAMPS_DIR}}/mock-webhook-image.stamp'
-      - test/e2e/setup/manifests/mock-audit-webhook/**
-    generates:
-      - '{{.STAMPS_DIR}}/mock-webhook.deployed'
-    status:
-      - '{{.KUBECTL}} --context {{.CTX}} -n {{.E2E_WEBHOOK_NAMESPACE}} rollout status deploy/{{.E2E_WEBHOOK_SERVICE_NAME}} --timeout=10s >/dev/null 2>&1'
-    cmds:
-      - task: e2e:load-mock-webhook-image
-      - "{{.KUBECTL}} --context {{.CTX}} apply -k test/e2e/setup/manifests/mock-audit-webhook"
-      - "{{.KUBECTL}} --context {{.CTX}} -n {{.E2E_WEBHOOK_NAMESPACE}} rollout restart deploy/{{.E2E_WEBHOOK_SERVICE_NAME}}"
-      - "{{.KUBECTL}} --context {{.CTX}} -n {{.E2E_WEBHOOK_NAMESPACE}} rollout status deploy/{{.E2E_WEBHOOK_SERVICE_NAME}} --timeout=180s"
-      - touch {{.STAMPS_DIR}}/mock-webhook.deployed
+      - rm -f {{.STAMPS_DIR}}/proxy-webhook-tester.installed
 
   e2e:_backend-deployed:
     method: timestamp
@@ -408,9 +308,12 @@ tasks:
     generates:
       - '{{.STAMPS_DIR}}/requestheader-ca.applied'
     status:
+      - test "$(cat "{{.STAMPS_DIR}}/backend.deployed" 2>/dev/null)" = "{{.E2E_BACKEND_MANIFEST_DIR}}"
       - '{{.KUBECTL}} --context {{.CTX}} -n {{.E2E_PROXY_NAMESPACE}} get secret/audit-pass-through-requestheader-client-ca >/dev/null 2>&1'
     cmds:
       - task: e2e:_backend-deployed
+        vars:
+          E2E_BACKEND_MANIFEST_DIR: "{{.E2E_BACKEND_MANIFEST_DIR}}"
       - "{{.KUBECTL}} --context {{.CTX}} create namespace {{.E2E_PROXY_NAMESPACE}} --dry-run=client -o yaml | {{.KUBECTL}} --context {{.CTX}} apply -f -"
       - |
         export CTX="{{.CTX}}"
@@ -418,64 +321,6 @@ tasks:
         export SECRET_NAME="audit-pass-through-requestheader-client-ca"
         bash hack/e2e/write-requestheader-client-ca.sh
       - touch {{.STAMPS_DIR}}/requestheader-ca.applied
-
-  e2e:_webhook-kubeconfig-written:
-    method: timestamp
-    sources:
-      - '{{.STAMPS_DIR}}/mock-webhook.deployed'
-      - hack/e2e/write-webhook-kubeconfig.sh
-    generates:
-      - '{{.STAMPS_DIR}}/webhook-kubeconfig.applied'
-    status:
-      - '{{.KUBECTL}} --context {{.CTX}} -n {{.E2E_PROXY_NAMESPACE}} get secret/audit-pass-through-webhook-kubeconfig >/dev/null 2>&1'
-    cmds:
-      - task: e2e:_mock-webhook-deployed
-      - "{{.KUBECTL}} --context {{.CTX}} create namespace {{.E2E_PROXY_NAMESPACE}} --dry-run=client -o yaml | {{.KUBECTL}} --context {{.CTX}} apply -f -"
-      - |
-        export CTX="{{.CTX}}"
-        export PROXY_NAMESPACE="{{.E2E_PROXY_NAMESPACE}}"
-        export SECRET_NAME="audit-pass-through-webhook-kubeconfig"
-        export WEBHOOK_NAMESPACE="{{.E2E_WEBHOOK_NAMESPACE}}"
-        export WEBHOOK_SERVICE_NAME="{{.E2E_WEBHOOK_SERVICE_NAME}}"
-        bash hack/e2e/write-webhook-kubeconfig.sh
-      - touch {{.STAMPS_DIR}}/webhook-kubeconfig.applied
-
-  e2e:_proxy-installed:
-    method: timestamp
-    sources:
-      - '{{.STAMPS_DIR}}/proxy-image.stamp'
-      - '{{.STAMPS_DIR}}/requestheader-ca.applied'
-      - '{{.STAMPS_DIR}}/webhook-kubeconfig.applied'
-      - '{{.E2E_PROXY_VALUES_FILE}}'
-      - charts/apiservice-audit-proxy/**
-    generates:
-      - '{{.STAMPS_DIR}}/proxy.installed'
-    status:
-      - '{{.KUBECTL}} --context {{.CTX}} -n {{.E2E_PROXY_NAMESPACE}} rollout status deploy/{{.E2E_RELEASE_NAME}} --timeout=10s >/dev/null 2>&1'
-      - '! {{.KUBECTL}} --context {{.CTX}} -n {{.E2E_PROXY_NAMESPACE}} get deploy/{{.E2E_RELEASE_NAME}}-webhook-tester >/dev/null 2>&1'
-      - |
-        expected="$(printf 'mode=mock-webhook\nimage=%s\nvalues=%s\nbackend=%s\n' "$(cat "{{.STAMPS_DIR}}/proxy-image.stamp" 2>/dev/null)" "{{.E2E_PROXY_VALUES_FILE}}" "{{.E2E_BACKEND_MANIFEST_DIR}}")"
-        test "$(cat "{{.STAMPS_DIR}}/proxy.installed" 2>/dev/null)" = "${expected}"
-    cmds:
-      - task: e2e:load-image
-      - task: e2e:_requestheader-ca-copied
-      - task: e2e:_webhook-kubeconfig-written
-      - |
-        {{.HELM}} upgrade --install {{.E2E_RELEASE_NAME}} ./charts/apiservice-audit-proxy \
-          --kube-context {{.CTX}} \
-          --namespace {{.E2E_PROXY_NAMESPACE}} \
-          --create-namespace \
-          --values {{.E2E_PROXY_VALUES_FILE}} \
-          --set image.repository={{.E2E_PROXY_IMAGE_REPOSITORY}} \
-          --set image.tag={{.E2E_PROXY_IMAGE_TAG}}
-      - "{{.KUBECTL}} --context {{.CTX}} -n {{.E2E_PROXY_NAMESPACE}} rollout restart deploy/{{.E2E_RELEASE_NAME}}"
-      - "{{.KUBECTL}} --context {{.CTX}} -n {{.E2E_PROXY_NAMESPACE}} rollout status deploy/{{.E2E_RELEASE_NAME}} --timeout=180s"
-      - |
-        printf 'mode=mock-webhook\nimage=%s\nvalues=%s\nbackend=%s\n' \
-          "$(<"{{.STAMPS_DIR}}/proxy-image.stamp")" \
-          "{{.E2E_PROXY_VALUES_FILE}}" \
-          "{{.E2E_BACKEND_MANIFEST_DIR}}" \
-          > {{.STAMPS_DIR}}/proxy.installed
 
   e2e:_proxy-with-webhook-tester-installed:
     method: timestamp
@@ -495,6 +340,8 @@ tasks:
     cmds:
       - task: e2e:load-image
       - task: e2e:_requestheader-ca-copied
+        vars:
+          E2E_BACKEND_MANIFEST_DIR: "{{.E2E_BACKEND_MANIFEST_DIR}}"
       - |
         {{.HELM}} upgrade --install {{.E2E_RELEASE_NAME}} ./charts/apiservice-audit-proxy \
           --kube-context {{.CTX}} \

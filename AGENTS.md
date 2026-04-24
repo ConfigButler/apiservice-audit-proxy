@@ -83,8 +83,8 @@ task e2e:cluster-up
 # Tear the cluster down
 task e2e:cluster-down
 
-# Rebuild and reload images without rerunning tests
-task e2e:load-images
+# Rebuild and reload the proxy image without rerunning tests
+task e2e:load-image
 
 # Re-deploy the proxy only (faster than a full smoke run when iterating on
 # chart or proxy code changes)
@@ -96,16 +96,15 @@ task e2e:deploy-proxy
 ```
 e2e:test-smoke
  └─ e2e:prepare
-     ├─ e2e:load-images
-     │   ├─ e2e:build-image          (builds apiservice-audit-proxy:e2e-local)
-     │   └─ e2e:build-mock-webhook-image
      └─ e2e:deploy-proxy
+         ├─ e2e:load-image
+         │   └─ e2e:build-image      (builds apiservice-audit-proxy:e2e-local)
          ├─ e2e:prepare-requestheader-client-ca
          │   └─ e2e:deploy-backend
          │       └─ e2e:flux-bootstrap
          │           └─ e2e:cluster-up
-         └─ e2e:prepare-webhook-kubeconfig
-             └─ e2e:deploy-mock-webhook
+         └─ Helm webhookTester.enabled=true
+             └─ chart-generated webhook kubeconfig Secret
 ```
 
 ### What `e2e:flux-bootstrap` installs

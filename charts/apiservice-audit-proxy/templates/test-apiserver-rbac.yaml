@@ -1,0 +1,94 @@
+{{- if .Values.testApiserver.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "apiservice-audit-proxy.testApiserver.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "apiservice-audit-proxy.testApiserver.labels" . | nindent 4 }}
+  {{- with .Values.testApiserver.serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "apiservice-audit-proxy.testApiserver.rbacName" . }}
+  labels:
+    {{- include "apiservice-audit-proxy.testApiserver.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - namespaces
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - admissionregistration.k8s.io
+    resources:
+      - mutatingwebhookconfigurations
+      - validatingwebhookconfigurations
+      - validatingadmissionpolicies
+      - validatingadmissionpolicybindings
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - flowcontrol.apiserver.k8s.io
+    resources:
+      - prioritylevelconfigurations
+      - flowschemas
+    verbs:
+      - list
+      - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "apiservice-audit-proxy.testApiserver.rbacName" . }}
+  labels:
+    {{- include "apiservice-audit-proxy.testApiserver.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "apiservice-audit-proxy.testApiserver.rbacName" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "apiservice-audit-proxy.testApiserver.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "apiservice-audit-proxy.testApiserver.authDelegatorBindingName" . }}
+  labels:
+    {{- include "apiservice-audit-proxy.testApiserver.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "apiservice-audit-proxy.testApiserver.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "apiservice-audit-proxy.testApiserver.authReaderBindingName" . }}
+  namespace: kube-system
+  labels:
+    {{- include "apiservice-audit-proxy.testApiserver.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: extension-apiserver-authentication-reader
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "apiservice-audit-proxy.testApiserver.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

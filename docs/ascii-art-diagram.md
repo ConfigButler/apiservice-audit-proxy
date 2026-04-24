@@ -29,12 +29,12 @@
                                                                  │ 3. audit webhook POST
                                                                  ▼
                                           ┌──────────────────────────────────────────┐
-                                          │  mock-audit-webhook                      │
-                                          │  (namespace: audit-pass-through-e2e)     │
+                                          │  webhook-tester                          │
+                                          │  (namespace: wardle)                     │
                                           │                                          │
                                           │  • receives audit events over HTTP       │
                                           │  • stores them in memory                 │
-                                          │  • exposes GET /events for assertions    │
+                                          │  • exposes session request APIs + UI     │
                                           └──────────────────────────────────────────┘
                                                                  ▲
                                           ┌──────────────────────────────────────────┐
@@ -42,8 +42,8 @@
                                           │                                          │
                                           │  1. waits for APIService to be Available │
                                           │  2. creates a Flunder via kube-apiserver │
-                                          │  3. port-forwards to mock-audit-webhook  │
-                                          │  4. polls GET /events until it sees the  │
+                                          │  3. port-forwards to webhook-tester      │
+                                          │  4. polls the proxy session until it sees│
                                           │     Flunder's audit event with           │
                                           │     requestObject + responseObject set   │
                                           └──────────────────────────────────────────┘

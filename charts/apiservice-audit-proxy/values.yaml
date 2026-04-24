@@ -102,6 +102,50 @@ env: []
 volumes: []
 volumeMounts: []
 
+# Optional demo backend: Kubernetes sample-apiserver (Wardle). Disabled by
+# default. Enabling this only renders the backend resources; proxy settings
+# such as backend.url, backend.clientCertSecretName, and apiService.enabled
+# stay explicit. See values-demo.yaml for a complete demo install.
+testApiserver:
+  enabled: false
+  nameOverride: ""
+
+  image:
+    repository: registry.k8s.io/e2e-test-images/sample-apiserver
+    pullPolicy: IfNotPresent
+    tag: "1.33.8"
+
+  etcd:
+    image:
+      repository: registry.k8s.io/etcd
+      pullPolicy: IfNotPresent
+      tag: "v3.6.8"
+
+  replicaCount: 1
+
+  serviceAccount:
+    annotations: {}
+    name: ""
+
+  service:
+    type: ClusterIP
+    port: 443
+
+  backendClientCert:
+    selfSignedIssuerName: ""
+    caSecretName: ""
+    caIssuerName: ""
+    clientSecretName: ""
+
+  resources: {}
+  etcdResources: {}
+  podAnnotations: {}
+  podSecurityContext: {}
+  securityContext: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
 # Optional demo component: webhook-tester receives audit events from the proxy
 # and displays them in a live browser UI. Disabled by default.
 #

@@ -18,7 +18,8 @@ It is intentionally a simple implementation, scoped to the gap needed for
   configured webhook
 - supports serving TLS, backend TLS validation, backend mTLS, and optional
   front-proxy client CA verification
-- ships with a Helm chart and local k3d-based e2e smoke tests
+- ships with a Helm chart, optional demo components, and local k3d-based e2e
+  smoke tests
 
 ## Limitations
 
@@ -41,6 +42,21 @@ task build
 task helm:lint
 task e2e:test-smoke
 ```
+
+## Demo Chart Path
+
+The chart keeps production defaults in `values.yaml` and puts the coordinated
+demo choices in `values-demo.yaml`:
+
+```bash
+helm template apiservice-audit-proxy charts/apiservice-audit-proxy \
+  --namespace wardle \
+  --values charts/apiservice-audit-proxy/values-demo.yaml
+```
+
+`values-demo.yaml` explicitly enables the Wardle sample-apiserver backend, the
+matching APIService, and webhook-tester. The templates do not silently rewrite
+top-level proxy settings when demo components are enabled.
 
 ## Docs
 

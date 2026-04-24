@@ -1,0 +1,30 @@
+# Demo values for a complete local install:
+# - Wardle sample-apiserver backend
+# - apiservice-audit-proxy fronting that backend
+# - webhook-tester receiving proxy audit events
+#
+# These values are intentionally explicit. The chart templates do not reinterpret
+# top-level proxy settings when demo components are enabled.
+
+apiService:
+  enabled: true
+  group: wardle.example.com
+  name: v1alpha1.wardle.example.com
+  version: v1alpha1
+
+backend:
+  url: "https://api-backend.wardle.svc:443"
+  insecureSkipVerify: true
+  clientCertSecretName: audit-pass-through-backend-client-cert
+
+testApiserver:
+  enabled: true
+  nameOverride: api-backend
+  backendClientCert:
+    selfSignedIssuerName: audit-pass-through-backend-selfsigned
+    caSecretName: audit-pass-through-backend-client-ca
+    caIssuerName: audit-pass-through-backend-client-ca-issuer
+    clientSecretName: audit-pass-through-backend-client-cert
+
+webhookTester:
+  enabled: true

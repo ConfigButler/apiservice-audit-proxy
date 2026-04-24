@@ -142,7 +142,6 @@ There are three independent trust relationships:
 - `pkg/audit`: audit event construction
 - `pkg/identity`: delegated requestheader identity extraction
 - `pkg/webhook`: outbound audit webhook client
-- `cmd/mock-audit-webhook`: local test receiver used by e2e
 
 ## Component Diagram
 
@@ -162,10 +161,7 @@ flowchart TD
     subgraph wardle["namespace: wardle"]
         proxy["apiservice-audit-proxy\n(port 9445 → Service :443)"]
         backend["wardle-server\nsample aggregated API\n+ etcd sidecar"]
-    end
-
-    subgraph e2ens["namespace: audit-pass-through-e2e"]
-        webhook["mock-audit-webhook\nGET /events  POST /sink"]
+        webhook["webhook-tester\n/api/session/{uuid}/requests"]
     end
 
     client -->|"kubectl create / get flunder"| apiserver
@@ -176,7 +172,7 @@ flowchart TD
     proxy -->|"proxied response"| apiserver
     apiserver -->|"response"| client
 
-    client -->|"port-forward → GET /events\nassert requestObject present"| webhook
+    client -->|"port-forward → GET session requests\nassert requestObject present"| webhook
 ```
 
 ## Local E2E Shape
@@ -187,6 +183,6 @@ The local smoke flow is centered on a narrow but realistic path:
 - Flux bootstrap (cert-manager, traefik, reflector, prometheus-operator)
 - cert-manager-backed proxy serving TLS
 - Wardle sample-apiserver backend
-- mock audit webhook receiver
+- webhook-tester audit receiver
 - one smoke lane using backend skip-verify
 - one smoke lane using explicit backend CA validation

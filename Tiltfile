@@ -15,7 +15,7 @@ local_resource(
 
 local_resource(
     'proxy-update',
-    cmd='task --force e2e:build-image && task --force e2e:load-image && task --force e2e:deploy-proxy',
+    cmd='task --force e2e:build-image && task --force e2e:load-image && task --force e2e:deploy-with-webhook-tester',
     deps=[
         'cmd',
         'pkg',
@@ -31,25 +31,10 @@ local_resource(
 )
 
 local_resource(
-    'mock-webhook-update',
-    cmd='task --force e2e:build-mock-webhook-image && task --force e2e:load-mock-webhook-image && task --force e2e:deploy-mock-webhook',
-    deps=[
-        'cmd/mock-audit-webhook',
-        'go.mod',
-        'go.sum',
-        'Dockerfile',
-    ],
-    trigger_mode=TRIGGER_MODE_AUTO,
-    auto_init=False,
-    resource_deps=['e2e-prepare'],
-    labels=['supporting'],
-)
-
-local_resource(
     'smoke-test',
     cmd='task e2e:test-smoke',
     trigger_mode=TRIGGER_MODE_MANUAL,
     auto_init=False,
-    resource_deps=['proxy-update', 'mock-webhook-update'],
+    resource_deps=['proxy-update'],
     labels=['tests'],
 )

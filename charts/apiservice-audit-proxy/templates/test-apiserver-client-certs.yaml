@@ -1,0 +1,63 @@
+{{- if .Values.testApiserver.enabled }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "apiservice-audit-proxy.testApiserver.selfSignedIssuerName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "apiservice-audit-proxy.testApiserver.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "apiservice-audit-proxy.testApiserver.clientCASecretName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "apiservice-audit-proxy.testApiserver.labels" . | nindent 4 }}
+spec:
+  commonName: {{ include "apiservice-audit-proxy.testApiserver.clientCASecretName" . }}
+  isCA: true
+  issuerRef:
+    kind: Issuer
+    name: {{ include "apiservice-audit-proxy.testApiserver.selfSignedIssuerName" . }}
+  privateKey:
+    algorithm: ECDSA
+    rotationPolicy: Always
+    size: 256
+  secretName: {{ include "apiservice-audit-proxy.testApiserver.clientCASecretName" . }}
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "apiservice-audit-proxy.testApiserver.clientCAIssuerName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "apiservice-audit-proxy.testApiserver.labels" . | nindent 4 }}
+spec:
+  ca:
+    secretName: {{ include "apiservice-audit-proxy.testApiserver.clientCASecretName" . }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "apiservice-audit-proxy.testApiserver.clientCertSecretName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "apiservice-audit-proxy.testApiserver.labels" . | nindent 4 }}
+spec:
+  commonName: audit-pass-through-proxy
+  issuerRef:
+    kind: Issuer
+    name: {{ include "apiservice-audit-proxy.testApiserver.clientCAIssuerName" . }}
+  privateKey:
+    rotationPolicy: Always
+  secretName: {{ include "apiservice-audit-proxy.testApiserver.clientCertSecretName" . }}
+  subject:
+    organizations:
+      - system:masters
+  usages:
+    - digital signature
+    - client auth
+{{- end }}

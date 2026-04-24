@@ -1,0 +1,70 @@
+{{- if .Values.testApiserver.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "apiservice-audit-proxy.testApiserver.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "apiservice-audit-proxy.testApiserver.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.testApiserver.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "apiservice-audit-proxy.testApiserver.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.testApiserver.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "apiservice-audit-proxy.testApiserver.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "apiservice-audit-proxy.testApiserver.serviceAccountName" . }}
+      {{- with .Values.testApiserver.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: wardle-server
+          image: "{{ .Values.testApiserver.image.repository }}:{{ .Values.testApiserver.image.tag }}"
+          imagePullPolicy: {{ .Values.testApiserver.image.pullPolicy }}
+          {{- with .Values.testApiserver.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          args:
+            - --etcd-servers=http://localhost:2379
+            - --client-ca-file=/etc/wardle/proxy-client-ca/ca.crt
+          ports:
+            - name: https
+              containerPort: 443
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.testApiserver.resources | nindent 12 }}
+          volumeMounts:
+            - mountPath: /etc/wardle/proxy-client-ca
+              name: proxy-client-ca
+              readOnly: true
+        - name: etcd
+          image: "{{ .Values.testApiserver.etcd.image.repository }}:{{ .Values.testApiserver.etcd.image.tag }}"
+          imagePullPolicy: {{ .Values.testApiserver.etcd.image.pullPolicy }}
+          resources:
+            {{- toYaml .Values.testApiserver.etcdResources | nindent 12 }}
+      volumes:
+        - name: proxy-client-ca
+          secret:
+            secretName: {{ include "apiservice-audit-proxy.testApiserver.clientCASecretName" . }}
+      {{- with .Values.testApiserver.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.testApiserver.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.testApiserver.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
