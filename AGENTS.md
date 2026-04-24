@@ -175,10 +175,27 @@ The chart lives in `charts/apiservice-audit-proxy/`. Key notes:
 
 ## Commit and PR Hygiene
 
-- Run `task ci` and confirm it passes before opening a PR
+- **Never run `git commit`, `git push`, or open PRs yourself.** The human
+  reviews every change before it lands; stage files at most, and leave the
+  commit to them. This applies even when a task seems obviously done.
+- Run `task ci` and confirm it passes before asking for a commit
 - For e2e changes, run `task e2e:test-smoke` and confirm `--- PASS: TestSmoke`
+- You may freely run `kubectl`, `task`, `helm`, `docker`, and `gh` (read-only,
+  e.g. `gh run list`, `gh run view`) to investigate and iterate locally
 - Keep commits focused; reference the issue or context in the commit body
 - Do not commit `.stamps/` directories (they are gitignored build artefacts)
+
+## Related Repositories (external-resources/)
+
+The `external-resources/` directory is gitignored and contains local checkouts
+of sibling projects that this proxy interacts with. Read them freely for
+context — they often answer "why does the proxy do X" better than this repo
+alone. Do not edit files inside `external-resources/` from this repository (unless asked explicitly by user).
+
+| Path | Repo | Why it matters here |
+|---|---|---|
+| [external-resources/gitops-reverser/](external-resources/gitops-reverser/) | `ConfigButler/gitops-reverser` | Downstream consumer of the audit events this proxy emits; shares the same devcontainer and may run a second k3d cluster concurrently. See its `AGENTS.md` and `docs/` for the reverse-GitOps flow. |
+| [external-resources/webhook-tester/](external-resources/webhook-tester/) | `tarampampam/webhook-tester` | Reference webhook server used during e2e to receive and inspect the emitted audit events. Useful for understanding the wire format the proxy produces. |
 
 ## Useful Reference
 
