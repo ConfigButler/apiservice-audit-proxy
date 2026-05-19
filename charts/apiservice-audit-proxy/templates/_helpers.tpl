@@ -246,4 +246,3 @@ Standard volume paths.
 {{- define "apiservice-audit-proxy.paths.tls" -}}/var/run/audit-pass-through/tls{{- end }}
 {{- define "apiservice-audit-proxy.paths.backendCA" -}}/var/run/audit-pass-through/backend-ca{{- end }}
 {{- define "apiservice-audit-proxy.paths.backendClient" -}}/var/run/audit-pass-through/backend-client{{- end }}
-{{- define "apiservice-audit-proxy.paths.requestHeaderCA" -}}/var/run/audit-pass-through/requestheader-client-ca{{- end }}

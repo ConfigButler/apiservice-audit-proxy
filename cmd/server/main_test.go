@@ -67,15 +67,6 @@ func TestParseFlags_Validation(t *testing.T) {
 			want: "--tls-cert-file and --tls-private-key-file must be provided together",
 		},
 		{
-			name: "client ca requires serving tls",
-			args: []string{
-				"--backend-url=http://backend.local",
-				"--webhook-kubeconfig=/tmp/webhook.kubeconfig",
-				"--client-ca-file=/tmp/client-ca.pem",
-			},
-			want: "--client-ca-file requires --tls-cert-file and --tls-private-key-file",
-		},
-		{
 			name: "only backend client cert",
 			args: []string{
 				"--backend-url=https://backend.local",
@@ -105,35 +96,12 @@ func TestParseFlags_Validation(t *testing.T) {
 			want: `--backend-identity-mode must be "requestheader" or "impersonation"`,
 		},
 		{
-			name: "impersonation mode requires client ca",
-			args: []string{
-				"--backend-url=http://backend.local",
-				"--webhook-kubeconfig=/tmp/webhook.kubeconfig",
-				"--backend-identity-mode=impersonation",
-			},
-			want: "--backend-identity-mode=impersonation requires --client-ca-file",
-		},
-		{
-			name: "impersonation mode requires allowed names",
-			args: []string{
-				"--backend-url=http://backend.local",
-				"--webhook-kubeconfig=/tmp/webhook.kubeconfig",
-				"--tls-cert-file=/tmp/tls.crt",
-				"--tls-private-key-file=/tmp/tls.key",
-				"--client-ca-file=/tmp/client-ca.pem",
-				"--backend-identity-mode=impersonation",
-			},
-			want: "--backend-identity-mode=impersonation requires a non-empty --client-allowed-names",
-		},
-		{
 			name: "impersonation mode rejects backend client certificate",
 			args: []string{
 				"--backend-url=http://backend.local",
 				"--webhook-kubeconfig=/tmp/webhook.kubeconfig",
 				"--tls-cert-file=/tmp/tls.crt",
 				"--tls-private-key-file=/tmp/tls.key",
-				"--client-ca-file=/tmp/client-ca.pem",
-				"--client-allowed-names=front-proxy-client",
 				"--backend-identity-mode=impersonation",
 				"--backend-client-cert-file=/tmp/client.crt",
 				"--backend-client-key-file=/tmp/client.key",
@@ -148,8 +116,6 @@ func TestParseFlags_Validation(t *testing.T) {
 				"--webhook-kubeconfig=/tmp/webhook.kubeconfig",
 				"--tls-cert-file=/tmp/tls.crt",
 				"--tls-private-key-file=/tmp/tls.key",
-				"--client-ca-file=/tmp/client-ca.pem",
-				"--client-allowed-names=front-proxy-client",
 				"--backend-identity-mode=impersonation",
 				"--backend-impersonation-extra-keys=scopes",
 				"--backend-impersonation-forward-all-extras=true",
@@ -186,8 +152,6 @@ func TestParseFlags_ImpersonationMode_Accepted(t *testing.T) {
 		"--webhook-kubeconfig=/tmp/webhook.kubeconfig",
 		"--tls-cert-file=/tmp/tls.crt",
 		"--tls-private-key-file=/tmp/tls.key",
-		"--client-ca-file=/tmp/client-ca.pem",
-		"--client-allowed-names=front-proxy-client,aggregator",
 		"--backend-identity-mode=impersonation",
 		"--backend-impersonation-token-file=/tmp/token",
 		"--backend-impersonation-extra-keys=scopes,example.com/tenant",
@@ -196,25 +160,10 @@ func TestParseFlags_ImpersonationMode_Accepted(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "impersonation", cfg.backendIdentityMode)
-	assert.Equal(t, "front-proxy-client,aggregator", cfg.clientAllowedNames)
 	assert.Equal(t, "/tmp/token", cfg.backendImpersonationTokenFile)
 	assert.Equal(t, "scopes,example.com/tenant", cfg.backendImpersonationExtraKeys)
 	assert.False(t, cfg.backendImpersonationForwardUID)
 	assert.False(t, cfg.backendImpersonationForwardAllExtras)
-}
-
-func TestParseFlags_RequestHeaderMode_AllowedNamesAccepted(t *testing.T) {
-	t.Parallel()
-
-	cfg, err := parseFlags([]string{
-		"--backend-url=http://backend.local",
-		"--webhook-kubeconfig=/tmp/webhook.kubeconfig",
-		"--client-allowed-names=front-proxy-client",
-	}, io.Discard)
-	require.NoError(t, err)
-
-	assert.Equal(t, "requestheader", cfg.backendIdentityMode)
-	assert.Equal(t, "front-proxy-client", cfg.clientAllowedNames)
 }
 
 func TestWrapImpersonationTransport_MissingTokenFile(t *testing.T) {
@@ -400,23 +349,27 @@ func TestBuildBackendTransport_BackendClientCertificate_IsLoaded(t *testing.T) {
 	assert.NotEmpty(t, transport.TLSClientConfig.Certificates[0].Certificate)
 }
 
-func TestBuildServingTLSConfig_ClientCA_IsApplied(t *testing.T) {
+func TestBuildServingTLSConfig_RequestsClientCertWithoutStaticPool(t *testing.T) {
 	t.Parallel()
 
-	caCertPEM, _, _ := writeSignedClientCertificate(t, "front-proxy-ca", "kube-aggregator")
-	caFile := filepath.Join(t.TempDir(), "client-ca.pem")
-	require.NoError(t, os.WriteFile(caFile, caCertPEM, 0o600))
-
-	tlsConfig, err := buildServingTLSConfig(config{
+	// Inbound trust is cluster-sourced: the TLS layer only requests a client
+	// certificate, it does not verify it against a static pool. The
+	// requestheader x509 verifier — backed by the dynamic cluster CA — is the
+	// single inbound trust authority.
+	tlsConfig := buildServingTLSConfig(config{
 		tlsCertFile:       "/tmp/tls.crt",
 		tlsPrivateKeyFile: "/tmp/tls.key",
-		clientCAFile:      caFile,
 	})
-	require.NoError(t, err)
 	require.NotNil(t, tlsConfig)
 	assert.EqualValues(t, tls.VersionTLS12, tlsConfig.MinVersion)
-	assert.Equal(t, tls.VerifyClientCertIfGiven, tlsConfig.ClientAuth)
-	require.NotNil(t, tlsConfig.ClientCAs)
+	assert.Equal(t, tls.RequestClientCert, tlsConfig.ClientAuth)
+	assert.Nil(t, tlsConfig.ClientCAs, "no static client CA pool with cluster-sourced trust")
+}
+
+func TestBuildServingTLSConfig_PlainHTTPWhenNoCert(t *testing.T) {
+	t.Parallel()
+
+	assert.Nil(t, buildServingTLSConfig(config{}))
 }
 
 func writeBackendCertFile(t *testing.T, certDER []byte) string {

@@ -301,12 +301,12 @@ That is why Kubernetes commonly pairs delegated requestheader auth with a
 front-proxy client certificate. The backend verifies that the immediate caller
 is a trusted front proxy before it trusts the delegated headers.
 
-In this repository, the equivalent control is `--client-ca-file`:
-
-- if it is not set, the proxy will read delegated headers without extra client
-  certificate verification
-- if it is set, the proxy only trusts delegated headers when the inbound client
-  certificate validates against that CA
+In this repository, that control is not a flag at all. The proxy sources the
+front-proxy CA — together with the accepted client names and identity header
+names — live from the cluster's `kube-system/extension-apiserver-authentication`
+ConfigMap, and only trusts delegated headers when the inbound client certificate
+validates against that CA. There is no setting whose omission yields an
+unverified proxy; see [`requestheader-trust-design.md`](requestheader-trust-design.md).
 
 The implementation is here:
 
@@ -393,7 +393,7 @@ If you want a simple way to remember the design, think of it like this:
   "Should the proxy trust the backend's serving certificate?"
 - `--backend-client-cert-file` and `--backend-client-key-file` answer:
   "Should the backend trust the proxy as a client?"
-- `--client-ca-file` answers:
+- the cluster's `extension-apiserver-authentication` ConfigMap answers:
   "Should the proxy trust delegated identity headers from the caller?"
 - the webhook kubeconfig answers:
   "How should the proxy trust and authenticate to the audit webhook?"

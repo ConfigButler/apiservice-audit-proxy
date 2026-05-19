@@ -29,12 +29,6 @@
 {{- if and (eq $extrasMode "allowlist") (not $impersonation.extras.keys) }}
 {{- fail "backend.identity.impersonation.extras.keys must be set when backend.identity.impersonation.extras.mode=allowlist" }}
 {{- end }}
-{{- if not .Values.requestHeader.clientCASecretName }}
-{{- fail "requestHeader.clientCASecretName must be set when backend.identity.mode=impersonation" }}
-{{- end }}
-{{- if not .Values.requestHeader.allowedNames }}
-{{- fail "requestHeader.allowedNames must be set when backend.identity.mode=impersonation" }}
-{{- end }}
 {{- if .Values.backend.clientCertSecretName }}
 {{- fail "backend.clientCertSecretName is not supported when backend.identity.mode=impersonation" }}
 {{- end }}
@@ -101,12 +95,6 @@ spec:
             - --backend-client-cert-file={{ include "apiservice-audit-proxy.paths.backendClient" . }}/{{ .Values.backend.clientCertFileName }}
             - --backend-client-key-file={{ include "apiservice-audit-proxy.paths.backendClient" . }}/{{ .Values.backend.clientKeyFileName }}
             {{- end }}
-            {{- if .Values.requestHeader.clientCASecretName }}
-            - --client-ca-file={{ include "apiservice-audit-proxy.paths.requestHeaderCA" . }}/{{ .Values.requestHeader.clientCAFileName }}
-            {{- end }}
-            {{- if .Values.requestHeader.allowedNames }}
-            - --client-allowed-names={{ join "," .Values.requestHeader.allowedNames }}
-            {{- end }}
             - --backend-identity-mode={{ $identityMode }}
             {{- if eq $identityMode "impersonation" }}
             - --backend-impersonation-token-file={{ $impersonation.tokenFile }}
@@ -161,11 +149,6 @@ spec:
               mountPath: {{ include "apiservice-audit-proxy.paths.backendClient" . }}
               readOnly: true
             {{- end }}
-            {{- if .Values.requestHeader.clientCASecretName }}
-            - name: requestheader-client-ca
-              mountPath: {{ include "apiservice-audit-proxy.paths.requestHeaderCA" . }}
-              readOnly: true
-            {{- end }}
             {{- with .Values.volumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -187,11 +170,6 @@ spec:
         - name: backend-client
           secret:
             secretName: {{ .Values.backend.clientCertSecretName }}
-        {{- end }}
-        {{- if .Values.requestHeader.clientCASecretName }}
-        - name: requestheader-client-ca
-          secret:
-            secretName: {{ .Values.requestHeader.clientCASecretName }}
         {{- end }}
         {{- with .Values.volumes }}
         {{- toYaml . | nindent 8 }}

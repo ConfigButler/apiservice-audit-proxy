@@ -114,6 +114,56 @@ func TestExtractor_FromRequest_TrustsOnlyAllowedClientNames(t *testing.T) {
 	})
 }
 
+func TestExtractor_FromRequest_RejectsCertificateFromUntrustedCA(t *testing.T) {
+	t.Parallel()
+
+	// Checklist A: the inbound client certificate must be signed by the
+	// configured requestheader CA. A certificate with the expected common name
+	// but signed by a different CA must not be trusted.
+	trustedCAFile, _ := writeClientCAFixture(t, "front-proxy-ca", "kube-aggregator")
+	_, foreignCertificate := writeClientCAFixture(t, "rogue-ca", "kube-aggregator")
+
+	extractor, err := NewExtractor(trustedCAFile, nil)
+	require.NoError(t, err)
+
+	userInfo, ok, _ := extractor.FromRequest(&http.Request{
+		Header: http.Header{
+			"X-Remote-User":  {"alice"},
+			"X-Remote-Group": {"devs"},
+		},
+		TLS: &tls.ConnectionState{
+			PeerCertificates: []*x509.Certificate{foreignCertificate},
+		},
+	})
+	assert.False(t, ok)
+	assert.Empty(t, userInfo.Username)
+}
+
+func TestExtractor_FromRequest_EmptyAllowedNamesTrustsAnyCommonName(t *testing.T) {
+	t.Parallel()
+
+	// Checklist A: an empty allowed-names list means any common name signed by
+	// the requestheader CA is accepted. This documents that dangerous behavior
+	// so a future change to the default cannot pass silently.
+	caFile, clientCertificate := writeClientCAFixture(t, "front-proxy-ca", "some-unexpected-name")
+
+	extractor, err := NewExtractor(caFile, nil)
+	require.NoError(t, err)
+
+	userInfo, ok, err := extractor.FromRequest(&http.Request{
+		Header: http.Header{
+			"X-Remote-User":  {"alice"},
+			"X-Remote-Group": {"devs"},
+		},
+		TLS: &tls.ConnectionState{
+			PeerCertificates: []*x509.Certificate{clientCertificate},
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, "alice", userInfo.Username)
+}
+
 func writeClientCAFixture(t *testing.T, caCommonName, clientCommonName string) (string, *x509.Certificate) {
 	t.Helper()
 

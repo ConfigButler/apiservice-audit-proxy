@@ -85,11 +85,6 @@ tasks:
       - task: e2e:build-image
       - task: e2e:_proxy-image-loaded
 
-  e2e:prepare-requestheader-client-ca:
-    desc: Copy the cluster requestheader client CA into the proxy namespace for secure delegated identity trust
-    cmds:
-      - task: e2e:_requestheader-ca-copied
-
   e2e:deploy-proxy:
     desc: Install the sample backend, pass-through proxy, and webhook-tester with cert-manager-backed TLS
     cmds:
@@ -145,6 +140,16 @@ tasks:
       - |
         CTX={{.CTX}} WEBHOOK_TESTER_BASE_URL={{.WEBHOOK_TESTER_BASE_URL}} \
           go test -tags=e2e -run 'TestImpersonationRBACMissing' -count=1 -v ./test/e2e
+
+  e2e:test-requestheader-trust:
+    desc: |
+      Verify inbound requestheader trust is sourced from the cluster ConfigMap:
+      no CA Secret is installed, an audited write succeeds, and deleting the
+      kube-system auth-reader RoleBinding fails the proxy's startup.
+    deps:
+      - e2e:portforward-webhook-tester
+    cmds:
+      - "CTX={{.CTX}} WEBHOOK_TESTER_BASE_URL={{.WEBHOOK_TESTER_BASE_URL}} go test -tags=e2e -run 'TestRequestHeaderTrustFromCluster' -count=1 -v ./test/e2e"
 
   e2e:test-image-refresh:
     desc: Validate image load → pod digest chain (cluster required; runs after smoke)
@@ -340,30 +345,11 @@ tasks:
         bash hack/e2e/load-image.sh
       - rm -f {{.STAMPS_DIR}}/proxy-webhook-tester.installed
 
-  e2e:_requestheader-ca-copied:
-    method: timestamp
-    sources:
-      - '{{.STAMPS_DIR}}/services.ready'
-      - hack/e2e/write-requestheader-client-ca.sh
-    generates:
-      - '{{.STAMPS_DIR}}/requestheader-ca.applied'
-    status:
-      - '{{.KUBECTL}} --context {{.CTX}} -n {{.E2E_PROXY_NAMESPACE}} get secret/audit-pass-through-requestheader-client-ca >/dev/null 2>&1'
-    cmds:
-      - task: e2e:_services-ready
-      - "{{.KUBECTL}} --context {{.CTX}} create namespace {{.E2E_PROXY_NAMESPACE}} --dry-run=client -o yaml | {{.KUBECTL}} --context {{.CTX}} apply -f -"
-      - |
-        export CTX="{{.CTX}}"
-        export PROXY_NAMESPACE="{{.E2E_PROXY_NAMESPACE}}"
-        export SECRET_NAME="audit-pass-through-requestheader-client-ca"
-        bash hack/e2e/write-requestheader-client-ca.sh
-      - touch {{.STAMPS_DIR}}/requestheader-ca.applied
-
   e2e:_proxy-with-webhook-tester-installed:
     method: timestamp
     sources:
       - '{{.STAMPS_DIR}}/proxy-image.stamp'
-      - '{{.STAMPS_DIR}}/requestheader-ca.applied'
+      - '{{.STAMPS_DIR}}/services.ready'
       - '{{.E2E_PROXY_VALUES_FILE}}'
       - charts/apiservice-audit-proxy/**
     generates:
@@ -377,7 +363,7 @@ tasks:
         test "$(cat "{{.STAMPS_DIR}}/proxy-webhook-tester.installed" 2>/dev/null)" = "${expected}"
     cmds:
       - task: e2e:load-image
-      - task: e2e:_requestheader-ca-copied
+      - task: e2e:_services-ready
       - |
         {{.HELM}} upgrade --install {{.E2E_RELEASE_NAME}} ./charts/apiservice-audit-proxy \
           --kube-context {{.CTX}} \

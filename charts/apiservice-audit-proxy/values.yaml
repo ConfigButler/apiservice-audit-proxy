@@ -86,12 +86,12 @@ backend:
         # default; only valid when mode=impersonation.
         create: false
 
-requestHeader:
-  clientCASecretName: ""
-  clientCAFileName: ca.crt
-  # Accepted client certificate common names on the inbound hop. Empty trusts
-  # any name under the CA; must be set when backend.identity.mode=impersonation.
-  allowedNames: []
+# Inbound requestheader trust — the front-proxy CA, accepted client names, and
+# identity header names — is sourced live from the cluster's
+# kube-system/extension-apiserver-authentication ConfigMap. There is no
+# requestHeader.* configuration and no CA Secret to manage: the chart's
+# kube-system RoleBinding (templates/auth-reader-rbac.yaml) grants the proxy
+# ServiceAccount read access, and CA rotation is picked up automatically.
 
 webhook:
   kubeconfigSecretName: audit-pass-through-webhook-kubeconfig

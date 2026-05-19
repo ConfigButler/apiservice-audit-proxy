@@ -38,15 +38,6 @@ testApiserver:
     caIssuerName: audit-pass-through-backend-client-ca-issuer
     clientSecretName: audit-pass-through-backend-client-cert
 
-requestHeader:
-  clientCASecretName: audit-pass-through-requestheader-client-ca
-  # Pin the kube-apiserver front-proxy client common name. Impersonation mode
-  # rejects an empty list. k3d/k3s uses system:auth-proxy; the harness should
-  # confirm this against the extension-apiserver-authentication ConfigMap key
-  # requestheader-allowed-names.
-  allowedNames:
-    - system:auth-proxy
-
 webhook:
   kubeconfigSecretName: audit-pass-through-webhook-kubeconfig
 

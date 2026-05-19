@@ -12,6 +12,16 @@ import (
 	x509request "k8s.io/apiserver/pkg/authentication/request/x509"
 )
 
+// Default identity header names used by the file-backed Extractor. The
+// cluster-backed Extractor instead reads whatever header names the cluster
+// configured; see NewClusterExtractor.
+const (
+	headerRemoteUser        = "X-Remote-User"
+	headerRemoteUID         = "X-Remote-Uid"
+	headerRemoteGroup       = "X-Remote-Group"
+	headerRemoteExtraPrefix = "X-Remote-Extra-"
+)
+
 // Extractor resolves delegated requestheader identity from an inbound request.
 type Extractor struct {
 	authenticator           authenticator.Request
@@ -40,10 +50,10 @@ func NewExtractor(clientCAFile string, allowedNames []string) (*Extractor, error
 }
 
 func newAuthenticator(clientCAFile string, allowedNames []string) (authenticator.Request, error) {
-	nameHeaders := headerrequest.StaticStringSlice([]string{"X-Remote-User"})
-	uidHeaders := headerrequest.StaticStringSlice([]string{"X-Remote-Uid"})
-	groupHeaders := headerrequest.StaticStringSlice([]string{"X-Remote-Group"})
-	extraPrefixes := headerrequest.StaticStringSlice([]string{"X-Remote-Extra-"})
+	nameHeaders := headerrequest.StaticStringSlice([]string{headerRemoteUser})
+	uidHeaders := headerrequest.StaticStringSlice([]string{headerRemoteUID})
+	groupHeaders := headerrequest.StaticStringSlice([]string{headerRemoteGroup})
+	extraPrefixes := headerrequest.StaticStringSlice([]string{headerRemoteExtraPrefix})
 
 	if clientCAFile == "" {
 		return headerrequest.New(
