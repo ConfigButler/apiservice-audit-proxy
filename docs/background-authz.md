@@ -19,39 +19,49 @@ kubectl / client
   v
 front kube-apiserver
   |
-  | mTLS from kube-apiserver to extension apiserver
+  | mTLS from front kube-apiserver to aggregated-apiserver-proxy
   | X-Remote-User: alice
   | X-Remote-Group: devs
   v
-your APIService backend / extension apiserver / proxy
+your aggregated-apiserver-proxy
 ```
 
 The official Kubernetes aggregation docs describe the flow as: the Kubernetes apiserver authenticates the requesting user, authorizes access to the requested API path, proxies the request to the extension apiserver, the extension apiserver authenticates the request from Kubernetes apiserver, authorizes the original user, and then executes the request.
 
-That means your earlier instinct is correct: requestheader mode is the normal aggregation-layer contract between the main kube-apiserver and an extension apiserver.
+That means your earlier instinct is correct: requestheader mode is the normal aggregation-layer contract between the front kube-apiserver and an extension apiserver.
 
-Impersonation becomes interesting when your aggregated backend is not really the final executor, but a pass-through proxy to another kube-apiserver:
+Impersonation becomes interesting when your aggregated-apiserver-proxy is not really the final executor, but a pass-through proxy to another apiserver:
 
 ```
 client
   -> front kube-apiserver
-  -> your APIService proxy
-  -> real backend kube-apiserver
+  -> your aggregated-apiserver-proxy
+  -> aggregated-apiserver-backend
 ```
 
 For that second hop, I would generally prefer impersonation:
 
 ```
-your proxy
+your aggregated-apiserver-proxy
   |
   | Authorization: Bearer <proxy service account token>
   | Impersonate-User: alice
   | Impersonate-Group: devs
   v
-real backend kube-apiserver
+aggregated-apiserver-backend
 ```
 
-That keeps the final RBAC/admission decision inside the real backend kube-apiserver instead of forcing your proxy to become a miniature Kubernetes authorizer.
+That keeps the final RBAC/admission decision inside the aggregated-apiserver-backend instead of forcing the aggregated-apiserver-proxy to become a miniature Kubernetes authorizer.
+
+## Terminology used in this document
+
+This document has three servers in the chain. The middle one is, in Kubernetes' own terms, just another aggregated/extension apiserver — to Kubernetes there is no difference. The names below are role names for *this* topology:
+
+- **front kube-apiserver** — the cluster's main kube-apiserver that clients talk to. It authenticates the user and proxies aggregated API paths onward.
+- **aggregated-apiserver-proxy** — the component you are building. It is registered with the front kube-apiserver via an `APIService`, so in Kubernetes' terms it *is* an aggregated/extension apiserver. This document calls it the *proxy* because it does not execute requests itself; it forwards them.
+- **aggregated-apiserver-backend** — the apiserver behind the proxy that actually executes the request. Nothing about it is special to Kubernetes; the only thing that makes it the "backend" here is that the aggregated-apiserver-proxy sits in front of it.
+
+Where this document quotes the official Kubernetes contract it still uses the generic term *extension apiserver*, since that contract applies to any aggregated apiserver, proxy or not.
 
 ## The two mechanisms
 
@@ -59,7 +69,7 @@ That keeps the final RBAC/admission decision inside the real backend kube-apiser
 
 Requestheader auth is about trusting a proxy to authenticate users and pass their identity in headers.
 
-The incoming request to your aggregated server does not carry Alice's original token or client cert. Instead, the main kube-apiserver authenticates Alice, then forwards identity using configured headers such as:
+The incoming request to your aggregated-apiserver-proxy does not carry Alice's original token or client cert. Instead, the front kube-apiserver authenticates Alice, then forwards identity using configured headers such as:
 
 ```
 X-Remote-User: alice
@@ -67,7 +77,7 @@ X-Remote-Group: devs
 X-Remote-Extra-...
 ```
 
-The extension apiserver must not trust those headers blindly. It should trust them only when the incoming TLS connection is authenticated with a client certificate signed by the configured requestheader/front-proxy CA and, normally, with an allowed certificate common name. Kubernetes publishes the relevant CA, allowed names, and header names in the `extension-apiserver-authentication` ConfigMap.
+The aggregated-apiserver-proxy must not trust those headers blindly. It should trust them only when the incoming TLS connection is authenticated with a client certificate signed by the configured requestheader/front-proxy CA and, normally, with an allowed certificate common name. Kubernetes publishes the relevant CA, allowed names, and header names in the `extension-apiserver-authentication` ConfigMap.
 
 The relevant kube-apiserver flags are roughly:
 
@@ -105,7 +115,7 @@ Kubernetes' impersonation flow is explicit:
 
 That is not just conceptual; the Kubernetes user impersonation docs state that impersonation requests authenticate as the requesting user first, then switch to the impersonated user info, and authorization acts on the impersonated user info.
 
-So if your proxy calls the backend kube-apiserver like this:
+So if your aggregated-apiserver-proxy calls the aggregated-apiserver-backend like this:
 
 ```
 Authorization: Bearer <your-proxy-serviceaccount-token>
@@ -113,7 +123,7 @@ Impersonate-User: alice
 Impersonate-Group: devs
 ```
 
-then the backend kube-apiserver does:
+then the aggregated-apiserver-backend does:
 
 ```
 authenticate proxy service account
@@ -124,49 +134,49 @@ run admission
 execute request
 ```
 
-The proxy does not have to manually reproduce the backend's RBAC decision for the actual resource operation, provided it is truly just forwarding and not doing extra side-effect work.
+The aggregated-apiserver-proxy does not have to manually reproduce the backend's RBAC decision for the actual resource operation, provided it is truly just forwarding and not doing extra side-effect work.
 
 ## Who does the authorization check?
 
 There are two different authorization checks in the architecture.
 
-### Authorization check A: front kube-apiserver before your proxy
+### Authorization check A: front kube-apiserver before the aggregated-apiserver-proxy
 
-When the original client calls the aggregated API path, the front kube-apiserver performs normal Kubernetes authentication and authorization before it proxies to your extension apiserver. The aggregation docs explicitly say the kube-apiserver authenticates the user and authorizes access to the requested API path before proxying.
+When the original client calls the aggregated API path, the front kube-apiserver performs normal Kubernetes authentication and authorization before it proxies to your aggregated-apiserver-proxy. The aggregation docs explicitly say the kube-apiserver authenticates the user and authorizes access to the requested API path before proxying.
 
-So this happens before your proxy sees the request:
+So this happens before your aggregated-apiserver-proxy sees the request:
 
 ```
 client -> front kube-apiserver
           authn user
           authz user against aggregated API path/resource
-          proxy request to your APIService backend
+          proxy request to your aggregated-apiserver-proxy
 ```
 
 That answers part of your question:
 
 **Yes, some authorization has already happened in the front kube-apiserver.**
 
-But that authorization is about whether the user may access the aggregated API path/resource as registered through APIService. It does not automatically prove that every downstream thing your proxy might do is safe.
+But that authorization is about whether the user may access the aggregated API path/resource as registered through APIService. It does not automatically prove that every downstream thing the aggregated-apiserver-proxy might do is safe.
 
-### Authorization check B: backend kube-apiserver when using impersonation
+### Authorization check B: aggregated-apiserver-backend when using impersonation
 
-If your proxy forwards to the real backend kube-apiserver using impersonation, then the backend kube-apiserver becomes the authority for the final resource operation.
+If the aggregated-apiserver-proxy forwards to the aggregated-apiserver-backend using impersonation, then the aggregated-apiserver-backend becomes the authority for the final resource operation.
 
 ```
-your proxy -> backend kube-apiserver
+your aggregated-apiserver-proxy -> aggregated-apiserver-backend
               authenticate proxy SA
               check proxy SA may impersonate user/groups
               authorize request as impersonated user
 ```
 
-This is the key design win. You can let the real kube-apiserver answer:
+This is the key design win. You can let the aggregated-apiserver-backend answer:
 
 > "May Alice actually get/list/watch/create/update/delete this backend resource?"
 
 Kubernetes authorization is performed inside the API server, and access is denied by default unless some authorization mechanism allows it.
 
-### Authorization check C: your proxy's own optional check
+### Authorization check C: the aggregated-apiserver-proxy's own optional check
 
 The official extension-apiserver model says the extension apiserver can authorize the original user by sending a SubjectAccessReview back to the Kubernetes apiserver, and Kubernetes includes the `system:auth-delegator` ClusterRole for allowing extension apiservers to submit those reviews.
 
@@ -181,14 +191,14 @@ front kube-apiserver -> extension apiserver
 For your pass-through proxy case, I'd separate it like this:
 
 ```
-If your proxy only forwards faithfully to another kube-apiserver:
+If your aggregated-apiserver-proxy only forwards faithfully to the aggregated-apiserver-backend:
   backend impersonation authz is usually enough for the backend operation.
 
-If your proxy performs its own side effects before/around forwarding:
-  your proxy probably needs its own authorization decision too.
+If your aggregated-apiserver-proxy performs its own side effects before/around forwarding:
+  your aggregated-apiserver-proxy probably needs its own authorization decision too.
 ```
 
-Examples where your proxy should probably do its own SubjectAccessReview:
+Examples where your aggregated-apiserver-proxy should probably do its own SubjectAccessReview:
 
 - It writes audit events to a separate sink before the backend accepts the request.
 - It mutates the request.
@@ -198,7 +208,7 @@ Examples where your proxy should probably do its own SubjectAccessReview:
 - It accepts non-resource URLs and translates them.
 - It hides backend errors or returns synthetic success.
 
-If it is a transparent byte-ish HTTP proxy with identity forwarding and audit observation, you can probably keep the proxy's own authorization minimal and rely on the backend kube-apiserver for final authorization.
+If it is a transparent byte-ish HTTP proxy with identity forwarding and audit observation, you can probably keep the aggregated-apiserver-proxy's own authorization minimal and rely on the aggregated-apiserver-backend for final authorization.
 
 ## Recommended architecture for your case
 
@@ -209,16 +219,16 @@ For something like apiserver-audit-proxy, I would use this mental model:
 client ───────> front kube-apiserver
                     |
                     | requestheader identity forwarding
-                    | mTLS: kube-apiserver proves it is trusted front proxy
+                    | mTLS: front kube-apiserver proves it is trusted front proxy
                     | X-Remote-User / X-Remote-Group
                     v
-                your aggregated proxy
+                your aggregated-apiserver-proxy
                     |
                     | derive impersonation from trusted X-Remote-* identity
                     | strip untrusted headers
                     | use proxy service account/cert
                     v
-                real backend kube-apiserver
+                aggregated-apiserver-backend
                 authn / impersonation check / authz #2 / admission
 ```
 
@@ -228,10 +238,10 @@ The responsibilities split nicely:
 
 - authenticate original client
 - authorize access to aggregated API path
-- proxy to APIService backend
+- proxy to aggregated-apiserver-proxy
 - pass user info via requestheader headers
 
-**your proxy:**
+**aggregated-apiserver-proxy:**
 
 - authenticate the front kube-apiserver via requestheader/front-proxy cert trust
 - trust X-Remote-* only after that validation
@@ -241,15 +251,15 @@ The responsibilities split nicely:
 - capture audit information
 - avoid making extra authorization decisions unless it performs extra side effects
 
-**backend kube-apiserver:**
+**aggregated-apiserver-backend:**
 
-- authenticate your proxy identity
-- check your proxy may impersonate the requested user/groups
+- authenticate the aggregated-apiserver-proxy identity
+- check the aggregated-apiserver-proxy may impersonate the requested user/groups
 - authorize the actual backend request as the impersonated user
 - run admission
 - execute or reject
 
-This is cleaner than making your proxy act as a full authorizer. It keeps Kubernetes RBAC and admission in the backend kube-apiserver, which is exactly where operators expect those decisions to happen.
+This is cleaner than making the aggregated-apiserver-proxy act as a full authorizer. It keeps Kubernetes RBAC and admission in the aggregated-apiserver-backend, which is exactly where operators expect those decisions to happen.
 
 ## Requestheader vs impersonation: comparison
 
@@ -306,7 +316,7 @@ rules:
 
 The docs also warn that impersonating a user or group lets you perform any action as that user or group, which is why normal user/group impersonation is not namespace-scoped and requires ClusterRole/ClusterRoleBinding.
 
-That point matters a lot. A proxy with broad impersonation over users and groups is effectively a high-trust component. You should treat it closer to control-plane infrastructure than a normal app.
+That point matters a lot. An aggregated-apiserver-proxy with broad impersonation over users and groups is effectively a high-trust component. You should treat it closer to control-plane infrastructure than a normal app.
 
 ## Important nuance: constrained impersonation
 
@@ -326,6 +336,7 @@ Can impersonate Alice
 ```
 
 Constrained impersonation could become a very nice hardening option later.
+Track where it is heading in [KEP-5284](https://github.com/kubernetes/enhancements/issues/5284).
 
 ## Security checklist
 
@@ -333,7 +344,7 @@ Constrained impersonation could become a very nice hardening option later.
 
 #### Validate the front-proxy client certificate
 
-Your proxy must not trust `X-Remote-User` merely because the header exists.
+Your aggregated-apiserver-proxy must not trust `X-Remote-User` merely because the header exists.
 
 It should validate that the incoming TLS client cert:
 
@@ -345,7 +356,7 @@ The aggregation docs describe exactly this validation responsibility for extensi
 
 #### Read trust configuration from extension-apiserver-authentication
 
-Your proxy should use the Kubernetes-published configuration where possible:
+Your aggregated-apiserver-proxy should use the Kubernetes-published configuration where possible:
 
 ```
 kube-system/configmap/extension-apiserver-authentication
@@ -360,7 +371,7 @@ The docs say kube-apiserver creates this ConfigMap and that extension apiservers
 
 #### Bind extension-apiserver-authentication-reader
 
-Your proxy service account needs permission to read that ConfigMap. Kubernetes provides the `extension-apiserver-authentication-reader` role in `kube-system` for this purpose.
+Your aggregated-apiserver-proxy's service account needs permission to read that ConfigMap. Kubernetes provides the `extension-apiserver-authentication-reader` role in `kube-system` for this purpose.
 
 #### Do not reuse the normal client CA as the requestheader CA
 
@@ -375,11 +386,11 @@ The aggregation docs explicitly warn that these two CA uses can conflict if reus
 
 #### Treat `--requestheader-allowed-names=""` as dangerous
 
-An empty allowed-names setting means any CN signed by the requestheader CA is acceptable. That may be valid in a controlled setup, but for your proxy I'd prefer explicit names where possible. The docs state that empty allowed names means any CN is acceptable.
+An empty allowed-names setting means any CN signed by the requestheader CA is acceptable. That may be valid in a controlled setup, but for your aggregated-apiserver-proxy I'd prefer explicit names where possible. The docs state that empty allowed names means any CN is acceptable.
 
-#### Reject direct access to your proxy
+#### Reject direct access to the aggregated-apiserver-proxy
 
-Ideally, your aggregated proxy should not be exposed as a general Service that clients can hit directly.
+Ideally, your aggregated-apiserver-proxy should not be exposed as a general Service that clients can hit directly.
 
 At minimum:
 
@@ -393,7 +404,7 @@ The main risk is someone bypassing the front kube-apiserver and sending their ow
 
 #### Strip inbound identity and impersonation headers before forwarding
 
-On the request received by your proxy, consider these tainted unless they are produced by the validated front kube-apiserver:
+On the request received by the aggregated-apiserver-proxy, consider these tainted unless they are produced by the validated front kube-apiserver:
 
 - `X-Remote-User`
 - `X-Remote-Group`
@@ -404,13 +415,13 @@ On the request received by your proxy, consider these tainted unless they are pr
 - `Impersonate-Extra-*`
 - `Authorization`
 
-Practically: parse the trusted `X-Remote-*` identity after authenticating the front proxy, then construct a clean outgoing request to the backend.
+Practically: parse the trusted `X-Remote-*` identity after authenticating the front proxy, then construct a clean outgoing request to the aggregated-apiserver-backend.
 
 Do not let the original client smuggle `Impersonate-*` headers through your component.
 
 ### B. Outgoing impersonation side
 
-#### Use a dedicated service account or client cert for the proxy
+#### Use a dedicated service account or client cert for the aggregated-apiserver-proxy
 
 Do not use a general-purpose admin identity.
 
@@ -420,7 +431,7 @@ Use something like:
 system:serviceaccount:<namespace>:apiserver-audit-proxy
 ```
 
-That identity should have only the permissions needed to contact the backend and impersonate the expected identities.
+That identity should have only the permissions needed to contact the aggregated-apiserver-backend and impersonate the expected identities.
 
 #### Keep impersonation RBAC as narrow as possible
 
@@ -454,7 +465,7 @@ system:serviceaccounts
 system:serviceaccounts:<namespace>
 ```
 
-In many clusters, group membership drives broad privileges. Accidentally allowing your proxy to impersonate privileged groups is effectively giving your proxy broad administrative power.
+In many clusters, group membership drives broad privileges. Accidentally allowing the aggregated-apiserver-proxy to impersonate privileged groups is effectively giving it broad administrative power.
 
 #### Decide whether to forward extra fields and UID
 
@@ -476,7 +487,7 @@ Impersonate-Group
 
 Then add UID/extras later if you can prove they matter.
 
-#### Expect the backend kube-apiserver to audit impersonation
+#### Expect the aggregated-apiserver-backend to audit impersonation
 
 Kubernetes docs say an audit event is logged for each impersonation request.
 
@@ -493,20 +504,20 @@ But do not assume this replaces your own audit proxy's event model. It is one la
 
 ### C. Authorization model
 
-#### Rely on backend RBAC for backend resources
+#### Rely on aggregated-apiserver-backend RBAC for backend resources
 
-If your proxy uses impersonation toward the backend kube-apiserver, let the backend kube-apiserver decide whether the impersonated user may perform the operation.
+If the aggregated-apiserver-proxy uses impersonation toward the aggregated-apiserver-backend, let the aggregated-apiserver-backend decide whether the impersonated user may perform the operation.
 
 That gives you this clean invariant:
 
-> If Alice could not do it directly on the backend,
-> Alice should not be able to do it through the proxy.
+> If Alice could not do it directly on the aggregated-apiserver-backend,
+> Alice should not be able to do it through the aggregated-apiserver-proxy.
 
 #### Add proxy-side SubjectAccessReview only for proxy-owned behavior
 
-Your proxy should consider a local/delegated authorization check when it does anything beyond transparent forwarding.
+Your aggregated-apiserver-proxy should consider a local/delegated authorization check when it does anything beyond transparent forwarding.
 
-Use a SubjectAccessReview when the proxy itself is the actor for a side effect. Kubernetes' aggregation docs describe extension apiservers authorizing the original user through SubjectAccessReview, with `system:auth-delegator` as the built-in role for submitting those reviews.
+Use a SubjectAccessReview when the aggregated-apiserver-proxy itself is the actor for a side effect. Kubernetes' aggregation docs describe extension apiservers authorizing the original user through SubjectAccessReview, with `system:auth-delegator` as the built-in role for submitting those reviews.
 
 Examples:
 
@@ -521,7 +532,7 @@ The front kube-apiserver's authorization check says:
 
 > Alice may access the aggregated API path.
 
-The backend kube-apiserver's authorization check says:
+The aggregated-apiserver-backend's authorization check says:
 
 > Alice may perform this actual backend operation.
 
@@ -570,13 +581,13 @@ If the backend says:
 422 Invalid
 ```
 
-your proxy should generally return that faithfully.
+your aggregated-apiserver-proxy should generally return that faithfully.
 
 Do not convert backend denials into proxy-level successes.
 
 #### Do not perform optimistic side effects before backend authorization completes
 
-If your proxy writes "accepted" audit records before the backend has actually accepted the request, label them carefully.
+If your aggregated-apiserver-proxy writes "accepted" audit records before the backend has actually accepted the request, label them carefully.
 
 A clean audit model distinguishes:
 
@@ -591,9 +602,9 @@ That maps nicely to Kubernetes audit-stage thinking, but avoid claiming authoriz
 
 ### E. Operational hardening
 
-#### Treat the proxy as control-plane-grade
+#### Treat the aggregated-apiserver-proxy as control-plane-grade
 
-If it can impersonate users toward a backend API server, it is not "just an app".
+If it can impersonate users toward the aggregated-apiserver-backend, it is not "just an app".
 
 Protect:
 
@@ -631,12 +642,12 @@ You may want to log normalized identity separately:
 
 #### Add explicit startup self-checks
 
-On startup, your proxy can verify:
+On startup, your aggregated-apiserver-proxy can verify:
 
 - can read extension-apiserver-authentication ConfigMap
 - has loaded requestheader CA
 - has non-empty / expected allowed names
-- can reach backend kube-apiserver
+- can reach the aggregated-apiserver-backend
 - its backend identity is who you expect
 - impersonation of a harmless test identity behaves as expected, if suitable
 
@@ -655,9 +666,9 @@ kubectl auth can-i list pods \
 That helps distinguish:
 
 ```
-backend denies Alice
+aggregated-apiserver-backend denies Alice
 vs.
-proxy is failing impersonation
+aggregated-apiserver-proxy is failing impersonation
 vs.
 front aggregation auth is failing
 ```
@@ -670,17 +681,17 @@ For your situation, I would use this as the default design:
 requestheader/front-proxy auth, because this is the native APIService contract.
 
 **Outgoing side:**
-impersonation, because the real backend kube-apiserver should make the final RBAC/admission decision.
+impersonation, because the aggregated-apiserver-backend should make the final RBAC/admission decision.
 
 **Proxy-side authz:**
 minimal for transparent forwarding; SubjectAccessReview only for proxy-owned side effects or semantic translations.
 
 That gives you a defensible trust model:
 
-- kube-apiserver authenticates original users
-- your proxy only trusts identity from a validated front proxy
-- backend kube-apiserver authorizes final operations
-- impersonation RBAC describes exactly how powerful the proxy is
+- front kube-apiserver authenticates original users
+- your aggregated-apiserver-proxy only trusts identity from a validated front proxy
+- the aggregated-apiserver-backend authorizes final operations
+- impersonation RBAC describes exactly how powerful the aggregated-apiserver-proxy is
 - audit data can show both proxy identity and impersonated identity
 
 The design smell to avoid is this:
@@ -691,6 +702,11 @@ The better invariant is:
 
 > "I trusted X-Remote-* only because the mTLS client was the configured front proxy.
 > I created Impersonate-* myself.
-> The backend kube-apiserver then decided whether the impersonated user may act."
+> The aggregated-apiserver-backend then decided whether the impersonated user may act."
 
-That is the cleanest model for your APIService + real-backend proxy experiment.
+That is the cleanest model for your aggregated-apiserver-proxy + aggregated-apiserver-backend experiment.
+
+## References
+
+- Kubernetes — [Configure the Aggregation Layer](https://kubernetes.io/docs/tasks/extend-kubernetes/configure-aggregation-layer/)
+- Kubernetes — [User impersonation: constrained impersonation](https://kubernetes.io/docs/reference/access-authn-authz/user-impersonation/#constrained-impersonation)
