@@ -1,0 +1,54 @@
+service:
+  port: 443
+
+containerPort: 9445
+
+apiService:
+  enabled: true
+  name: v1alpha1.wardle.example.com
+  group: wardle.example.com
+  version: v1alpha1
+  groupPriorityMinimum: 1000
+  versionPriority: 15
+
+backend:
+  url: https://api-backend.wardle.svc.cluster.local:443
+  insecureSkipVerify: true
+  serverName: api-backend.wardle.svc.cluster.local
+  # Impersonation mode: the proxy calls the backend as its own ServiceAccount
+  # and translates the verified user into Impersonate-* headers. No backend
+  # client certificate is needed.
+  identityMode: impersonation
+  impersonation:
+    forwardUid: true
+    # Empty allowlist: apiserver-injected extras are dropped, so only
+    # users/groups/uids RBAC is required.
+    extraKeys: []
+    rbac:
+      create: true
+
+testApiserver:
+  enabled: true
+  nameOverride: api-backend
+  backendClientCert:
+    selfSignedIssuerName: audit-pass-through-backend-selfsigned
+    caSecretName: audit-pass-through-backend-client-ca
+    caIssuerName: audit-pass-through-backend-client-ca-issuer
+    clientSecretName: audit-pass-through-backend-client-cert
+
+requestHeader:
+  clientCASecretName: audit-pass-through-requestheader-client-ca
+  # Pin the kube-apiserver front-proxy client common name. Impersonation mode
+  # rejects an empty list. k3d/k3s uses system:auth-proxy; the harness should
+  # confirm this against the extension-apiserver-authentication ConfigMap key
+  # requestheader-allowed-names.
+  allowedNames:
+    - system:auth-proxy
+
+webhook:
+  kubeconfigSecretName: audit-pass-through-webhook-kubeconfig
+
+certificates:
+  mode: cert-manager
+  certManager:
+    createSelfSignedIssuer: true

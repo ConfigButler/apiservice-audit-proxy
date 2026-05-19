@@ -252,7 +252,7 @@ func TestHandler_RequiresVerifiedDelegatedIdentity_WhenClientCAConfigured(t *tes
 	require.NoError(t, err)
 
 	caFile, clientCertificate := writeRequestHeaderClientCAFixture(t)
-	identityExtractor, err := identity.NewExtractor(caFile)
+	identityExtractor, err := identity.NewExtractor(caFile, nil)
 	require.NoError(t, err)
 
 	handler, err := NewHandler(HandlerConfig{

@@ -60,10 +60,32 @@ backend:
   clientCertFileName: tls.crt
   clientKeyFileName: tls.key
   serverName: ""
+  # Identity the proxy presents to the backend.
+  #   requestheader  - default; forward the inbound X-Remote-* headers.
+  #   impersonation  - call the backend as the proxy ServiceAccount and
+  #                    translate the verified user into Impersonate-* headers.
+  identityMode: requestheader
+  impersonation:
+    # ServiceAccount token file used as the backend bearer token.
+    tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+    # Project Impersonate-Uid when the verified identity has a UID.
+    forwardUid: true
+    # Allowlist of decoded extra keys. Single source of truth: it drives both
+    # the emitted Impersonate-Extra-* headers and the rendered userextras RBAC.
+    extraKeys: []
+    # Escape hatch: project every inbound extra. Mutually exclusive with extraKeys.
+    forwardAllExtras: false
+    rbac:
+      # Render the impersonator ClusterRole/ClusterRoleBinding. Off by default;
+      # operators opt in or supply their own impersonation RBAC.
+      create: false
 
 requestHeader:
   clientCASecretName: ""
   clientCAFileName: ca.crt
+  # Accepted client certificate common names on the inbound hop. Empty trusts
+  # any name under the CA; must be set when backend.identityMode=impersonation.
+  allowedNames: []
 
 webhook:
   kubeconfigSecretName: audit-pass-through-webhook-kubeconfig

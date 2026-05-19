@@ -22,8 +22,13 @@ type Extractor struct {
 //
 // When clientCAFile is set, the extractor only trusts delegated headers after
 // the inbound client certificate has been verified against that CA bundle.
-func NewExtractor(clientCAFile string) (*Extractor, error) {
-	authenticator, err := newAuthenticator(clientCAFile)
+//
+// allowedNames pins the accepted client certificate common names. An empty
+// list preserves the historical "any name under the CA" behavior; a non-empty
+// list rejects a CA-valid certificate whose common name is not listed. It is
+// only consulted when clientCAFile is set.
+func NewExtractor(clientCAFile string, allowedNames []string) (*Extractor, error) {
+	authenticator, err := newAuthenticator(clientCAFile, allowedNames)
 	if err != nil {
 		return nil, err
 	}
@@ -34,7 +39,7 @@ func NewExtractor(clientCAFile string) (*Extractor, error) {
 	}, nil
 }
 
-func newAuthenticator(clientCAFile string) (authenticator.Request, error) {
+func newAuthenticator(clientCAFile string, allowedNames []string) (authenticator.Request, error) {
 	nameHeaders := headerrequest.StaticStringSlice([]string{"X-Remote-User"})
 	uidHeaders := headerrequest.StaticStringSlice([]string{"X-Remote-Uid"})
 	groupHeaders := headerrequest.StaticStringSlice([]string{"X-Remote-Group"})
@@ -59,7 +64,7 @@ func newAuthenticator(clientCAFile string) (authenticator.Request, error) {
 
 	return headerrequest.NewDynamicVerifyOptionsSecure(
 		verifyOptionsFn,
-		headerrequest.StaticStringSlice(nil),
+		headerrequest.StaticStringSlice(append([]string(nil), allowedNames...)),
 		nameHeaders,
 		uidHeaders,
 		groupHeaders,
@@ -105,7 +110,7 @@ func (e *Extractor) FromRequest(request *http.Request) (authnv1.UserInfo, bool, 
 
 // FromHeaders extracts the delegated user identity from headers only.
 func FromHeaders(headers http.Header) authnv1.UserInfo {
-	extractor, err := NewExtractor("")
+	extractor, err := NewExtractor("", nil)
 	if err != nil {
 		return authnv1.UserInfo{}
 	}
