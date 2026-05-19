@@ -81,19 +81,13 @@ Done when:
 
 ## Trust And TLS Documentation
 
-The project needs a shorter operator-facing description of certificate
-ownership and rotation boundaries.
+The shorter operator-facing description now lives in
+[`HELM_VALUES.md`](HELM_VALUES.md) and
+[`CONNECTIONS_AND_TLS.md`](CONNECTIONS_AND_TLS.md).
 
-Document clearly:
+Remaining follow-up:
 
-- proxy serving TLS
-- backend server trust
-- backend client certificates
-- webhook transport credentials
-- delegated requestheader trust boundaries
-
-Also clarify whether the project ever needs more upstream-like requestheader
-policy, such as allowed client names.
+- add a production webhook mTLS example once a receiver-side test fixture exists
 
 ## Certificate UX Follow-Ups
 

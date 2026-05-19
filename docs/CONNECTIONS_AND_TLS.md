@@ -39,6 +39,14 @@ certificates:
   mode: cert-manager | dev-self-signed | existing-secret
 ```
 
+Choose the mode by certificate ownership:
+
+| Mode | Use when | Notes |
+|---|---|---|
+| `cert-manager` | cert-manager should issue and rotate the proxy serving certificate | Production-friendly when cert-manager is installed. |
+| `existing-secret` | another platform component owns the serving certificate Secret | Good for managed platforms and central certificate lifecycles. |
+| `dev-self-signed` | local throwaway demo or development | Forces `APIService` skip-verify; do not use for production. |
+
 The serving certificate is mounted into the proxy pod and used by:
 
 ```text
@@ -78,6 +86,8 @@ The chart control is:
 requestHeader:
   clientCASecretName: audit-pass-through-requestheader-client-ca
   clientCAFileName: ca.crt
+  allowedNames:
+    - system:auth-proxy
 ```
 
 When set, the proxy receives:
@@ -88,6 +98,8 @@ When set, the proxy receives:
 
 This is not the proxy's serving certificate. It is the CA used to decide whether
 the incoming client is allowed to provide delegated identity headers.
+`allowedNames` narrows that trust to specific client certificate common names.
+It is optional in `requestheader` mode and required in `impersonation` mode.
 
 In local e2e, `task e2e:prepare-requestheader-client-ca` copies the cluster's
 requestheader client CA into the proxy namespace before Helm installs the proxy.
@@ -205,6 +217,41 @@ backendClientCert  = proxy proves identity to backend
 
 Using both is mutual TLS for the proxy-to-backend hop.
 
+### Backend Identity Mode
+
+The TLS settings above decide how the proxy and backend authenticate the
+transport. `backend.identity.mode` decides how the proxied request carries the
+effective Kubernetes user to the backend.
+
+```yaml
+backend:
+  identity:
+    mode: requestheader | impersonation
+```
+
+`requestheader` is the default. The proxy forwards the verified `X-Remote-*`
+headers to the backend. Use it when the backend is itself configured as a
+requestheader/front-proxy-aware aggregated API server. If that backend also
+requires client certificate auth, set `backend.clientCertSecretName`.
+
+`impersonation` verifies the inbound requestheader identity, then calls the
+backend as the proxy ServiceAccount with Kubernetes `Impersonate-*` headers.
+Use it when the backend supports normal Kubernetes bearer-token auth and
+impersonation authorization. This avoids provisioning a backend client
+certificate private key to the chart, which is useful on platforms such as
+CozyStack where the frontend proxy key should stay owned by the platform.
+
+Important constraints for `impersonation`:
+
+- `requestHeader.clientCASecretName` and `requestHeader.allowedNames` are
+  required.
+- `backend.clientCertSecretName` is rejected in this mode today.
+- the proxy ServiceAccount needs impersonation RBAC for users, groups, UIDs,
+  and any forwarded user extras.
+- `backend.identity.impersonation.extras.mode=none` is the safest default;
+  prefer `allowlist` for required extras and reserve `all` for tightly
+  controlled environments.
+
 ## 4. Proxy to Audit Webhook, Lane B
 
 The proxy emits synthetic audit events using a kubeconfig-style webhook client.
@@ -309,16 +356,17 @@ NodePort details.
 
 The standard smoke demo uses these choices:
 
-| Area | Standard smoke | Backend-CA smoke |
-|---|---|---|
-| Proxy serving cert | cert-manager | cert-manager |
-| kube-apiserver trusts proxy | cert-manager APIService CA injection | cert-manager APIService CA injection |
-| Proxy verifies requestheader client | yes | yes |
-| Backend verifies proxy client cert | yes | yes |
-| Proxy verifies backend server cert | no, `insecureSkipVerify=true` | yes, `backend.caSecretName` + `serverName` |
-| Proxy audit webhook lane | HTTP direct to webhook-tester Service | HTTP direct to webhook-tester Service |
-| kube-apiserver audit webhook lane | HTTPS to Traefik, then HTTP to webhook-tester | same |
-| Browser UI | HTTP port-forward | HTTP port-forward |
+| Area | Standard smoke | Backend-CA smoke | Impersonation smoke |
+|---|---|---|---|
+| Proxy serving cert | cert-manager | cert-manager | cert-manager |
+| kube-apiserver trusts proxy | cert-manager APIService CA injection | cert-manager APIService CA injection | cert-manager APIService CA injection |
+| Proxy verifies requestheader client | yes | yes | yes, with allowed names |
+| Backend identity mode | `requestheader` | `requestheader` | `impersonation` |
+| Backend verifies proxy client cert | yes | yes | no backend client cert; backend authorizes impersonation |
+| Proxy verifies backend server cert | no, `insecureSkipVerify=true` | yes, `backend.caSecretName` + `serverName` | no, `insecureSkipVerify=true` |
+| Proxy audit webhook lane | HTTP direct to webhook-tester Service | HTTP direct to webhook-tester Service | HTTP direct to webhook-tester Service |
+| kube-apiserver audit webhook lane | HTTPS to Traefik, then HTTP to webhook-tester | same | same |
+| Browser UI | HTTP port-forward | HTTP port-forward | HTTP port-forward |
 
 The demo intentionally uses separate certificate authorities for separate trust
 questions:
@@ -461,6 +509,7 @@ unauthenticated requests are rejected.
 | `apiService.*` | How kube-apiserver reaches and trusts the proxy as an aggregated API server |
 | `requestHeader.*` | How the proxy verifies the kube-apiserver/front-proxy client before trusting delegated identity headers |
 | `backend.*` | How the proxy connects to and authenticates with the real backend |
+| `backend.identity.*` | How the proxy presents the delegated user to the backend: requestheader headers or Kubernetes impersonation |
 | `testApiserver.backendServingCert.*` | Demo-only resources that give the sample backend a server certificate |
 | `testApiserver.backendClientCert.*` | Demo-only resources that give the proxy a client certificate and the sample backend a client-auth CA |
 | `webhook.*` | Which kubeconfig Secret the proxy uses for audit webhook delivery |

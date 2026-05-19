@@ -25,6 +25,8 @@ The proxy:
 - stands in front of a real aggregated backend registered through `APIService`
 - forwards supported mutating requests to that backend
 - captures delegated `X-Remote-*` identity
+- forwards backend identity either as requestheader headers or as Kubernetes
+  impersonation headers
 - captures request and response bodies
 - emits one synthetic `audit.k8s.io/v1` `Event` at `stage: ResponseComplete`
 - wraps that event in an `EventList`
@@ -38,6 +40,7 @@ In scope:
 - mutating verbs: `create`, `update`, `patch`, `delete`
 - best-effort webhook delivery after the proxied response completes
 - delegated requestheader identity capture
+- backend identity modes: `requestheader` and `impersonation`
 - backend TLS validation and backend mTLS
 - optional front-proxy client certificate verification with
   `--client-ca-file`
@@ -68,7 +71,8 @@ Out of scope:
 
 ## Identity And Trust Model
 
-The canonical actor identity surface is the delegated requestheader path:
+The canonical actor identity surface at the proxy boundary is the delegated
+requestheader path:
 
 - `X-Remote-User`
 - `X-Remote-Uid`
@@ -82,11 +86,18 @@ Current trust model:
 - if `--client-ca-file` is configured, the proxy only trusts delegated identity
   when the inbound front-proxy client certificate validates against that CA
   bundle
+- if `--client-allowed-names` is configured, the proxy also pins the accepted
+  client certificate common names
+- `--backend-identity-mode=requestheader` forwards the verified `X-Remote-*`
+  identity to the backend
+- `--backend-identity-mode=impersonation` strips inbound identity and
+  authorization headers, then calls the backend with the proxy ServiceAccount
+  bearer token plus proxy-controlled `Impersonate-*` headers
 
 Current limitation:
 
-- the project does not yet model every upstream requestheader policy knob, such
-  as allowed client names
+- impersonation mode currently rejects backend client certificate flags; use
+  ServiceAccount bearer-token auth plus impersonation RBAC for that mode
 
 Identity contract:
 
@@ -166,7 +177,7 @@ flowchart TD
 
     client -->|"kubectl create / get flunder"| apiserver
     apiserver -->|"front-proxy request\n(X-Remote-User headers)"| proxy
-    proxy -->|"forwarded request\n(mTLS optional)"| backend
+    proxy -->|"forwarded request\nrequestheader/mTLS or impersonation"| backend
     backend -->|"response"| proxy
     proxy -.->|"best-effort\naudit EventList POST\n(after response returned)"| webhook
     proxy -->|"proxied response"| apiserver
