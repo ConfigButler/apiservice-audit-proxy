@@ -383,23 +383,34 @@ requestHeader:
   allowedNames: []
 
 backend:
-  identityMode: requestheader
-  impersonation:
-    tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
-    forwardUid: true
-    extraKeys: []
-    forwardAllExtras: false
-    rbac:
-      create: false
+  identity:
+    mode: requestheader
+    impersonation:
+      tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+      forwardUid: true
+      extras:
+        mode: none # none | allowlist | all
+        keys: []
+      rbac:
+        create: false
 ```
 
-`extraKeys` is the single source of truth for extras: it controls both which
-`Impersonate-Extra-*` headers the proxy emits and which `userextras/<key>` RBAC
-rules the chart renders.
+`backend.identity.mode` is the single backend identity strategy selector.
+`backend.identity.impersonation.*` is only active when that mode is
+`impersonation`; the chart fails if it is asked to render impersonation RBAC in
+`requestheader` mode.
+Deprecated sibling paths such as `backend.identityMode` and
+`backend.impersonation` fail rendering instead of being silently ignored.
+
+`extras.mode=allowlist` makes `extras.keys` the single source of truth for
+extras: it controls both which `Impersonate-Extra-*` headers the proxy emits and
+which `userextras/<key>` RBAC rules the chart renders. `extras.mode=none` drops
+all extras. `extras.mode=all` forwards every extra and renders broad extra RBAC.
 
 `requestHeader.allowedNames` lists the client certificate common names accepted
 on the inbound hop. It is empty by default (current behavior) but must be set
-when `identityMode=impersonation`; the chart should fail rendering otherwise.
+when `backend.identity.mode=impersonation`; the chart should fail rendering
+otherwise.
 
 Render args in
 [`templates/deployment.yaml`](../charts/apiservice-audit-proxy/templates/deployment.yaml):
@@ -408,30 +419,31 @@ Render args in
 {{- if .Values.requestHeader.allowedNames }}
 - --client-allowed-names={{ join "," .Values.requestHeader.allowedNames }}
 {{- end }}
-- --backend-identity-mode={{ .Values.backend.identityMode }}
-{{- if eq .Values.backend.identityMode "impersonation" }}
-- --backend-impersonation-token-file={{ .Values.backend.impersonation.tokenFile }}
-- --backend-impersonation-forward-uid={{ .Values.backend.impersonation.forwardUid }}
-{{- if .Values.backend.impersonation.forwardAllExtras }}
+- --backend-identity-mode={{ .Values.backend.identity.mode }}
+{{- if eq .Values.backend.identity.mode "impersonation" }}
+- --backend-impersonation-token-file={{ .Values.backend.identity.impersonation.tokenFile }}
+- --backend-impersonation-forward-uid={{ .Values.backend.identity.impersonation.forwardUid }}
+{{- if eq .Values.backend.identity.impersonation.extras.mode "all" }}
 - --backend-impersonation-forward-all-extras=true
-{{- else if .Values.backend.impersonation.extraKeys }}
-- --backend-impersonation-extra-keys={{ join "," .Values.backend.impersonation.extraKeys }}
+{{- else if eq .Values.backend.identity.impersonation.extras.mode "allowlist" }}
+- --backend-impersonation-extra-keys={{ join "," .Values.backend.identity.impersonation.extras.keys }}
 {{- end }}
 {{- end }}
 ```
 
 Add an optional RBAC template only when
-`backend.impersonation.rbac.create=true`.
+`backend.identity.mode=impersonation` and
+`backend.identity.impersonation.rbac.create=true`.
 
 The chart should not enable broad impersonation RBAC by default. Installing the
-proxy with `identityMode=impersonation` but without RBAC should fail clearly at
-runtime with a Kubernetes authorization error, which is safer than silently
-granting broad impersonation.
+proxy with `backend.identity.mode=impersonation` but without RBAC should fail
+clearly at runtime with a Kubernetes authorization error, which is safer than
+silently granting broad impersonation.
 
 ## RBAC shape
 
-A functional ClusterRole for `extraKeys: [scopes, example.com/tenant]` and
-`forwardUid: true` looks like:
+A functional ClusterRole for `extras.mode=allowlist`,
+`extras.keys: [scopes, example.com/tenant]`, and `forwardUid: true` looks like:
 
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -446,7 +458,7 @@ rules:
   - apiGroups: ["authentication.k8s.io"]
     resources: ["uids"]
     verbs: ["impersonate"]
-  # one entry per extraKeys value; omitted entirely when extraKeys is empty
+  # one entry per extras.keys value; omitted unless extras.mode=allowlist
   - apiGroups: ["authentication.k8s.io"]
     resources:
       - "userextras/scopes"
@@ -454,10 +466,11 @@ rules:
     verbs: ["impersonate"]
 ```
 
-The `userextras` rule is a direct projection of `extraKeys`: an empty allowlist
-renders no `userextras` rule at all, which is the safe default. When
-`forwardAllExtras: true` the chart replaces that rule with the bare resource
-wildcard `*` in `authentication.k8s.io` instead of enumerating keys.
+The `userextras` rule is a direct projection of `extras.keys` when
+`extras.mode=allowlist`. `extras.mode=none` renders no `userextras` rule at all,
+which is the safe default. When `extras.mode=all` the chart replaces that rule
+with the bare resource wildcard `*` in `authentication.k8s.io` instead of
+enumerating keys.
 
 Bind it to the chart ServiceAccount:
 
@@ -479,9 +492,9 @@ subjects:
 Notes:
 
 - RBAC does not support `userextras/*` as a wildcard subresource. It must be
-  enumerated as `userextras/<key>` (the `extraKeys` path), or the rule must use
-  the bare resource wildcard `*` in `authentication.k8s.io` (the
-  `forwardAllExtras` path).
+  enumerated as `userextras/<key>` (`extras.mode=allowlist`), or the rule must
+  use the bare resource wildcard `*` in `authentication.k8s.io`
+  (`extras.mode=all`).
 - RBAC uses the decoded, lower-case extra key as the subresource. The backend
   header uses an escaped suffix such as `Impersonate-Extra-example.com%2Ftenant`,
   but the RBAC resource is `userextras/example.com/tenant`.
@@ -587,9 +600,12 @@ forwarding.
 - impersonation values with an empty `requestHeader.allowedNames` fail rendering,
 - impersonation values render `--client-allowed-names`,
 - optional RBAC is not rendered by default (`rbac.create=false`),
-- RBAC renders one enumerated `userextras/<key>` rule per `extraKeys` value and
-  no `userextras` rule when `extraKeys` is empty,
-- `forwardAllExtras=true` renders the bare `authentication.k8s.io` resource
+- RBAC only renders when `backend.identity.mode=impersonation`,
+- `rbac.create=true` fails in `requestheader` mode,
+- RBAC renders one enumerated `userextras/<key>` rule per `extras.keys` value
+  when `extras.mode=allowlist`,
+- `extras.mode=none` renders no `userextras` rule,
+- `extras.mode=all` renders the bare `authentication.k8s.io` resource
   wildcard and never renders `userextras/*`,
 - the `uids` rule is rendered only when `forwardUid=true`.
 
@@ -613,8 +629,9 @@ this may be a harness prerequisite to add.
 
 Two new values files:
 
-- `proxy-impersonation.yaml`: `backend.identityMode=impersonation`,
-  `backend.impersonation.rbac.create=true`, no `backend.clientCertSecretName`.
+- `proxy-impersonation.yaml`: `backend.identity.mode=impersonation`,
+  `backend.identity.impersonation.rbac.create=true`, no
+  `backend.clientCertSecretName`.
 - `proxy-impersonation-no-rbac.yaml`: same, but `rbac.create=false` and no
   operator-supplied impersonation RBAC.
 
@@ -662,20 +679,21 @@ ConfigMap, key `requestheader-allowed-names`) so the values files can pin it.
 
 **Scenario 4 — apiserver-injected extras (`TestImpersonationApiserverExtras`).**
 
-1. With the default `proxy-impersonation.yaml` (empty `extraKeys`), perform a
+1. With the default `proxy-impersonation.yaml` (`extras.mode=none`), perform a
    write.
 2. A normal kubectl request already carries an apiserver-injected extra such as
    `authentication.kubernetes.io/credential-id`. Assert the write still succeeds
    with only `users`/`groups`/`uids` RBAC, proving the proxy dropped the
    un-allowlisted extra rather than requiring
    `userextras/authentication.kubernetes.io/credential-id`.
-3. Optionally add that key to `extraKeys` without adding RBAC and assert the
-   write now fails, proving the allowlist is what drives the impersonation set.
+3. Optionally switch to `extras.mode=allowlist` and add that key without adding
+   RBAC, then assert the write now fails, proving the allowlist is what drives
+   the impersonation set.
 
 **Scenario 5 — requestheader regression.**
 
 The existing `TestSmoke` and `TestAggregatedAPIAuditGap` lanes run unchanged
-with default values (`identityMode=requestheader`). They are the regression
+with default values (`backend.identity.mode=requestheader`). They are the regression
 guard that the new mode did not alter default behavior. No new test, but the
 design is not done until they still pass.
 
@@ -724,12 +742,12 @@ docs as "not yet wired", not "conceptually forbidden".
 
 **Broad RBAC — the chart ships optional RBAC, gated and not broad by default.**
 RBAC is rendered only when `rbac.create=true` (default `false`). The supported
-path is enumerated `userextras/<key>` rules driven by `extraKeys`; an empty
-allowlist renders no `userextras` rule at all. `forwardAllExtras` is the only
-switch that renders a wildcard, and it is off by default. The chart never
-renders broad impersonation RBAC implicitly. Shipping *something* matters —
-otherwise operators hand-roll worse RBAC — but "allow all" must never be the
-path of least resistance.
+path is enumerated `userextras/<key>` rules driven by `extras.mode=allowlist`
+and `extras.keys`; `extras.mode=none` renders no `userextras` rule at all.
+`extras.mode=all` is the only switch that renders a wildcard, and it is off by
+default. The chart never renders broad impersonation RBAC implicitly. Shipping
+*something* matters — otherwise operators hand-roll worse RBAC — but "allow all"
+must never be the path of least resistance.
 
 **Passthrough — keep `httputil.ReverseProxy`.** Watch and streaming are
 first-class APIService paths; re-implementing flush and upgrade handling in a

@@ -18,14 +18,16 @@ backend:
   # Impersonation mode: the proxy calls the backend as its own ServiceAccount
   # and translates the verified user into Impersonate-* headers. No backend
   # client certificate is needed.
-  identityMode: impersonation
-  impersonation:
-    forwardUid: true
-    # Empty allowlist: apiserver-injected extras are dropped, so only
-    # users/groups/uids RBAC is required.
-    extraKeys: []
-    rbac:
-      create: true
+  identity:
+    mode: impersonation
+    impersonation:
+      forwardUid: true
+      # No extras: apiserver-injected extras are dropped, so only
+      # users/groups/uids RBAC is required.
+      extras:
+        mode: none
+      rbac:
+        create: true
 
 testApiserver:
   enabled: true

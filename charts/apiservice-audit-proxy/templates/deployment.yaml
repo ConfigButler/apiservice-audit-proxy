@@ -1,5 +1,43 @@
-{{- if and (eq .Values.backend.identityMode "impersonation") (not .Values.requestHeader.allowedNames) }}
-{{- fail "requestHeader.allowedNames must be set when backend.identityMode=impersonation" }}
+{{- $identityMode := .Values.backend.identity.mode | default "requestheader" -}}
+{{- $impersonation := .Values.backend.identity.impersonation -}}
+{{- $extrasMode := $impersonation.extras.mode | default "none" -}}
+{{- if hasKey .Values.backend "identityMode" }}
+{{- fail "backend.identityMode has moved to backend.identity.mode" }}
+{{- end }}
+{{- if hasKey .Values.backend "impersonation" }}
+{{- fail "backend.impersonation has moved to backend.identity.impersonation" }}
+{{- end }}
+{{- if hasKey $impersonation "extraKeys" }}
+{{- fail "backend.identity.impersonation.extraKeys has moved to backend.identity.impersonation.extras.keys" }}
+{{- end }}
+{{- if hasKey $impersonation "forwardAllExtras" }}
+{{- fail "backend.identity.impersonation.forwardAllExtras has moved to backend.identity.impersonation.extras.mode=all" }}
+{{- end }}
+{{- if not (or (eq $identityMode "requestheader") (eq $identityMode "impersonation")) }}
+{{- fail "backend.identity.mode must be requestheader or impersonation" }}
+{{- end }}
+{{- if and (ne $identityMode "impersonation") $impersonation.rbac.create }}
+{{- fail "backend.identity.impersonation.rbac.create requires backend.identity.mode=impersonation" }}
+{{- end }}
+{{- if eq $identityMode "impersonation" }}
+{{- if not (or (eq $extrasMode "none") (eq $extrasMode "allowlist") (eq $extrasMode "all")) }}
+{{- fail "backend.identity.impersonation.extras.mode must be none, allowlist, or all" }}
+{{- end }}
+{{- if and (ne $extrasMode "allowlist") $impersonation.extras.keys }}
+{{- fail "backend.identity.impersonation.extras.keys requires backend.identity.impersonation.extras.mode=allowlist" }}
+{{- end }}
+{{- if and (eq $extrasMode "allowlist") (not $impersonation.extras.keys) }}
+{{- fail "backend.identity.impersonation.extras.keys must be set when backend.identity.impersonation.extras.mode=allowlist" }}
+{{- end }}
+{{- if not .Values.requestHeader.clientCASecretName }}
+{{- fail "requestHeader.clientCASecretName must be set when backend.identity.mode=impersonation" }}
+{{- end }}
+{{- if not .Values.requestHeader.allowedNames }}
+{{- fail "requestHeader.allowedNames must be set when backend.identity.mode=impersonation" }}
+{{- end }}
+{{- if .Values.backend.clientCertSecretName }}
+{{- fail "backend.clientCertSecretName is not supported when backend.identity.mode=impersonation" }}
+{{- end }}
 {{- end }}
 apiVersion: apps/v1
 kind: Deployment
@@ -69,14 +107,14 @@ spec:
             {{- if .Values.requestHeader.allowedNames }}
             - --client-allowed-names={{ join "," .Values.requestHeader.allowedNames }}
             {{- end }}
-            - --backend-identity-mode={{ .Values.backend.identityMode }}
-            {{- if eq .Values.backend.identityMode "impersonation" }}
-            - --backend-impersonation-token-file={{ .Values.backend.impersonation.tokenFile }}
-            - --backend-impersonation-forward-uid={{ .Values.backend.impersonation.forwardUid }}
-            {{- if .Values.backend.impersonation.forwardAllExtras }}
+            - --backend-identity-mode={{ $identityMode }}
+            {{- if eq $identityMode "impersonation" }}
+            - --backend-impersonation-token-file={{ $impersonation.tokenFile }}
+            - --backend-impersonation-forward-uid={{ $impersonation.forwardUid }}
+            {{- if eq $extrasMode "all" }}
             - --backend-impersonation-forward-all-extras=true
-            {{- else if .Values.backend.impersonation.extraKeys }}
-            - --backend-impersonation-extra-keys={{ join "," .Values.backend.impersonation.extraKeys }}
+            {{- else if eq $extrasMode "allowlist" }}
+            - --backend-impersonation-extra-keys={{ join "," $impersonation.extras.keys }}
             {{- end }}
             {{- end }}
             {{- with .Values.extraArgs }}

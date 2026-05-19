@@ -15,14 +15,16 @@ backend:
   url: https://api-backend.wardle.svc.cluster.local:443
   insecureSkipVerify: true
   serverName: api-backend.wardle.svc.cluster.local
-  identityMode: impersonation
-  impersonation:
-    forwardUid: true
-    extraKeys: []
-    rbac:
-      # No impersonation RBAC: the backend must reject the proxy ServiceAccount
-      # with a clean 403 cannot-impersonate error.
-      create: false
+  identity:
+    mode: impersonation
+    impersonation:
+      forwardUid: true
+      extras:
+        mode: none
+      rbac:
+        # No impersonation RBAC: the backend must reject the proxy ServiceAccount
+        # with a clean 403 cannot-impersonate error.
+        create: false
 
 testApiserver:
   enabled: true

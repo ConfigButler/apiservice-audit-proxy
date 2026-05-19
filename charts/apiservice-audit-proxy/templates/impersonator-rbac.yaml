@@ -1,4 +1,7 @@
-{{- if .Values.backend.impersonation.rbac.create }}
+{{- $identityMode := .Values.backend.identity.mode | default "requestheader" -}}
+{{- $impersonation := .Values.backend.identity.impersonation -}}
+{{- $extrasMode := $impersonation.extras.mode | default "none" -}}
+{{- if and (eq $identityMode "impersonation") $impersonation.rbac.create }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -13,7 +16,7 @@ rules:
       - serviceaccounts
     verbs:
       - impersonate
-  {{- if .Values.backend.impersonation.forwardUid }}
+  {{- if $impersonation.forwardUid }}
   - apiGroups:
       - authentication.k8s.io
     resources:
@@ -21,18 +24,18 @@ rules:
     verbs:
       - impersonate
   {{- end }}
-  {{- if .Values.backend.impersonation.forwardAllExtras }}
+  {{- if eq $extrasMode "all" }}
   - apiGroups:
       - authentication.k8s.io
     resources:
       - "*"
     verbs:
       - impersonate
-  {{- else if .Values.backend.impersonation.extraKeys }}
+  {{- else if eq $extrasMode "allowlist" }}
   - apiGroups:
       - authentication.k8s.io
     resources:
-      {{- range .Values.backend.impersonation.extraKeys }}
+      {{- range $impersonation.extras.keys }}
       - {{ printf "userextras/%s" . | quote }}
       {{- end }}
     verbs:
