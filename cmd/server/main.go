@@ -14,8 +14,11 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
+
+	clientgotransport "k8s.io/client-go/transport"
 
 	"github.com/ConfigButler/apiservice-audit-proxy/pkg/identity"
 	auditproxy "github.com/ConfigButler/apiservice-audit-proxy/pkg/proxy"
@@ -31,24 +34,37 @@ const (
 	defaultWebhookTimeout   = 5 * time.Second
 	defaultMaxAuditBodySize = int64(1024 * 1024)
 
+	backendIdentityModeRequestHeader = "requestheader"
+	backendIdentityModeImpersonation = "impersonation"
+
+	defaultBackendIdentityMode = backendIdentityModeRequestHeader
+	//nolint:gosec // G101: this is the standard projected ServiceAccount token file path, not a credential.
+	defaultBackendImpersonationTokenFile = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+
 	exitCodeUsage = 2
 )
 
 type config struct {
-	listenAddress             string
-	backendURL                string
-	backendInsecureSkipVerify bool
-	backendCAFile             string
-	backendClientCertFile     string
-	backendClientKeyFile      string
-	backendServerName         string
-	clientCAFile              string
-	webhookKubeconfig         string
-	webhookTimeout            time.Duration
-	maxAuditBodyBytes         int64
-	captureTempDir            string
-	tlsCertFile               string
-	tlsPrivateKeyFile         string
+	listenAddress                        string
+	backendURL                           string
+	backendInsecureSkipVerify            bool
+	backendCAFile                        string
+	backendClientCertFile                string
+	backendClientKeyFile                 string
+	backendServerName                    string
+	clientCAFile                         string
+	clientAllowedNames                   string
+	backendIdentityMode                  string
+	backendImpersonationTokenFile        string
+	backendImpersonationExtraKeys        string
+	backendImpersonationForwardAllExtras bool
+	backendImpersonationForwardUID       bool
+	webhookKubeconfig                    string
+	webhookTimeout                       time.Duration
+	maxAuditBodyBytes                    int64
+	captureTempDir                       string
+	tlsCertFile                          string
+	tlsPrivateKeyFile                    string
 }
 
 func main() {
@@ -71,7 +87,23 @@ func main() {
 		logger.Error("unable to configure backend transport", "error", err)
 		os.Exit(1)
 	}
-	identityExtractor, err := identity.NewExtractor(cfg.clientCAFile)
+
+	var roundTripper http.RoundTripper = backendTransport
+	var backendIdentity auditproxy.BackendIdentity = auditproxy.RequestHeaderForwarder{}
+	if cfg.backendIdentityMode == backendIdentityModeImpersonation {
+		roundTripper, err = wrapImpersonationTransport(backendTransport, cfg.backendImpersonationTokenFile)
+		if err != nil {
+			logger.Error("unable to configure backend impersonation transport", "error", err)
+			os.Exit(1)
+		}
+		backendIdentity = auditproxy.NewImpersonator(auditproxy.ImpersonatorConfig{
+			ExtraKeys:        splitCommaList(cfg.backendImpersonationExtraKeys),
+			ForwardAllExtras: cfg.backendImpersonationForwardAllExtras,
+			ForwardUID:       cfg.backendImpersonationForwardUID,
+		})
+	}
+
+	identityExtractor, err := identity.NewExtractor(cfg.clientCAFile, splitCommaList(cfg.clientAllowedNames))
 	if err != nil {
 		logger.Error("unable to initialize requestheader identity extractor", "error", err)
 		os.Exit(1)
@@ -88,7 +120,8 @@ func main() {
 		WebhookClient:     webhookClient,
 		IdentityExtractor: identityExtractor,
 		Logger:            logger.With("component", "proxy"),
-		Transport:         backendTransport,
+		Transport:         roundTripper,
+		BackendIdentity:   backendIdentity,
 		MaxAuditBodyBytes: cfg.maxAuditBodyBytes,
 		TempDir:           cfg.captureTempDir,
 	})
@@ -125,6 +158,12 @@ func main() {
 		"backend_client_key_file", cfg.backendClientKeyFile,
 		"backend_server_name", cfg.backendServerName,
 		"client_ca_file", cfg.clientCAFile,
+		"client_allowed_names", cfg.clientAllowedNames,
+		"backend_identity_mode", cfg.backendIdentityMode,
+		"backend_impersonation_token_file", cfg.backendImpersonationTokenFile,
+		"backend_impersonation_extra_keys", cfg.backendImpersonationExtraKeys,
+		"backend_impersonation_forward_all_extras", cfg.backendImpersonationForwardAllExtras,
+		"backend_impersonation_forward_uid", cfg.backendImpersonationForwardUID,
 		"webhook_kubeconfig", cfg.webhookKubeconfig,
 		"max_audit_body_bytes", cfg.maxAuditBodyBytes,
 		"capture_temp_dir", cfg.captureTempDir,
@@ -196,6 +235,42 @@ func parseFlags(args []string, stderr io.Writer) (config, error) {
 		"PEM bundle used to verify the front-proxy client certificate before trusting delegated X-Remote-* headers.",
 	)
 	fs.StringVar(
+		&cfg.clientAllowedNames,
+		"client-allowed-names",
+		"",
+		"Comma-separated list of accepted client certificate common names. Empty trusts any name under --client-ca-file.",
+	)
+	fs.StringVar(
+		&cfg.backendIdentityMode,
+		"backend-identity-mode",
+		defaultBackendIdentityMode,
+		"Identity the proxy presents to the backend: requestheader (forward X-Remote-*) or impersonation.",
+	)
+	fs.StringVar(
+		&cfg.backendImpersonationTokenFile,
+		"backend-impersonation-token-file",
+		defaultBackendImpersonationTokenFile,
+		"ServiceAccount token file used as the backend bearer token in impersonation mode.",
+	)
+	fs.StringVar(
+		&cfg.backendImpersonationExtraKeys,
+		"backend-impersonation-extra-keys",
+		"",
+		"Comma-separated allowlist of decoded extra keys projected into Impersonate-Extra-* headers.",
+	)
+	fs.BoolVar(
+		&cfg.backendImpersonationForwardAllExtras,
+		"backend-impersonation-forward-all-extras",
+		false,
+		"Project every inbound extra into Impersonate-Extra-*. Mutually exclusive with --backend-impersonation-extra-keys.",
+	)
+	fs.BoolVar(
+		&cfg.backendImpersonationForwardUID,
+		"backend-impersonation-forward-uid",
+		true,
+		"Project Impersonate-Uid when the verified identity has a non-empty UID.",
+	)
+	fs.StringVar(
 		&cfg.webhookKubeconfig,
 		"webhook-kubeconfig",
 		"",
@@ -225,6 +300,9 @@ func parseFlags(args []string, stderr io.Writer) (config, error) {
 		return config{}, err
 	}
 
+	setFlags := make(map[string]bool)
+	fs.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
+
 	if cfg.backendURL == "" {
 		fs.Usage()
 		return config{}, errors.New("--backend-url is required")
@@ -245,8 +323,94 @@ func parseFlags(args []string, stderr io.Writer) (config, error) {
 		fs.Usage()
 		return config{}, err
 	}
+	if err := validateBackendIdentityFlags(cfg, setFlags); err != nil {
+		fs.Usage()
+		return config{}, err
+	}
 
 	return cfg, nil
+}
+
+// validateBackendIdentityFlags enforces the backend identity mode rules.
+//
+// Impersonation mode turns verified X-Remote-* headers into authorized backend
+// impersonation, so it requires both a verified inbound client certificate and
+// a pinned set of accepted client common names. Backend client certificate
+// flags are rejected in impersonation mode to keep the identity model
+// unambiguous in this first implementation.
+func validateBackendIdentityFlags(cfg config, setFlags map[string]bool) error {
+	switch cfg.backendIdentityMode {
+	case backendIdentityModeRequestHeader, backendIdentityModeImpersonation:
+	default:
+		return fmt.Errorf("--backend-identity-mode must be %q or %q",
+			backendIdentityModeRequestHeader, backendIdentityModeImpersonation)
+	}
+
+	impersonationOnlyFlags := []string{
+		"backend-impersonation-token-file",
+		"backend-impersonation-extra-keys",
+		"backend-impersonation-forward-all-extras",
+		"backend-impersonation-forward-uid",
+	}
+
+	if cfg.backendIdentityMode == backendIdentityModeRequestHeader {
+		for _, name := range impersonationOnlyFlags {
+			if setFlags[name] {
+				return fmt.Errorf("--%s requires --backend-identity-mode=impersonation", name)
+			}
+		}
+		return nil
+	}
+
+	if cfg.clientCAFile == "" {
+		return errors.New("--backend-identity-mode=impersonation requires --client-ca-file")
+	}
+	if cfg.clientAllowedNames == "" {
+		return errors.New("--backend-identity-mode=impersonation requires a non-empty --client-allowed-names")
+	}
+	if cfg.backendClientCertFile != "" || cfg.backendClientKeyFile != "" {
+		return errors.New(
+			"--backend-client-cert-file and --backend-client-key-file are not yet supported " +
+				"with --backend-identity-mode=impersonation",
+		)
+	}
+	if cfg.backendImpersonationExtraKeys != "" && cfg.backendImpersonationForwardAllExtras {
+		return errors.New(
+			"--backend-impersonation-extra-keys and --backend-impersonation-forward-all-extras are mutually exclusive",
+		)
+	}
+
+	return nil
+}
+
+// splitCommaList splits a comma-separated flag value, trimming whitespace and
+// dropping empty entries. An empty or whitespace-only value yields nil.
+func splitCommaList(value string) []string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+
+	return result
+}
+
+// wrapImpersonationTransport wraps the backend transport with a refreshing
+// bearer-token round tripper. The token file is read once during construction;
+// a missing or unreadable file is therefore a startup failure.
+func wrapImpersonationTransport(base http.RoundTripper, tokenFile string) (http.RoundTripper, error) {
+	roundTripper, err := clientgotransport.NewBearerAuthWithRefreshRoundTripper("", tokenFile, base)
+	if err != nil {
+		return nil, fmt.Errorf("configure backend impersonation bearer token: %w", err)
+	}
+
+	return roundTripper, nil
 }
 
 func handleHealth(w http.ResponseWriter, _ *http.Request) {

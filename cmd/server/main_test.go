@@ -95,6 +95,76 @@ func TestParseFlags_Validation(t *testing.T) {
 			},
 			want: "--backend-client-cert-file and --backend-client-key-file must be provided together",
 		},
+		{
+			name: "invalid backend identity mode",
+			args: []string{
+				"--backend-url=http://backend.local",
+				"--webhook-kubeconfig=/tmp/webhook.kubeconfig",
+				"--backend-identity-mode=bogus",
+			},
+			want: `--backend-identity-mode must be "requestheader" or "impersonation"`,
+		},
+		{
+			name: "impersonation mode requires client ca",
+			args: []string{
+				"--backend-url=http://backend.local",
+				"--webhook-kubeconfig=/tmp/webhook.kubeconfig",
+				"--backend-identity-mode=impersonation",
+			},
+			want: "--backend-identity-mode=impersonation requires --client-ca-file",
+		},
+		{
+			name: "impersonation mode requires allowed names",
+			args: []string{
+				"--backend-url=http://backend.local",
+				"--webhook-kubeconfig=/tmp/webhook.kubeconfig",
+				"--tls-cert-file=/tmp/tls.crt",
+				"--tls-private-key-file=/tmp/tls.key",
+				"--client-ca-file=/tmp/client-ca.pem",
+				"--backend-identity-mode=impersonation",
+			},
+			want: "--backend-identity-mode=impersonation requires a non-empty --client-allowed-names",
+		},
+		{
+			name: "impersonation mode rejects backend client certificate",
+			args: []string{
+				"--backend-url=http://backend.local",
+				"--webhook-kubeconfig=/tmp/webhook.kubeconfig",
+				"--tls-cert-file=/tmp/tls.crt",
+				"--tls-private-key-file=/tmp/tls.key",
+				"--client-ca-file=/tmp/client-ca.pem",
+				"--client-allowed-names=front-proxy-client",
+				"--backend-identity-mode=impersonation",
+				"--backend-client-cert-file=/tmp/client.crt",
+				"--backend-client-key-file=/tmp/client.key",
+			},
+			want: "--backend-client-cert-file and --backend-client-key-file are not yet supported " +
+				"with --backend-identity-mode=impersonation",
+		},
+		{
+			name: "impersonation extra keys and forward all extras are mutually exclusive",
+			args: []string{
+				"--backend-url=http://backend.local",
+				"--webhook-kubeconfig=/tmp/webhook.kubeconfig",
+				"--tls-cert-file=/tmp/tls.crt",
+				"--tls-private-key-file=/tmp/tls.key",
+				"--client-ca-file=/tmp/client-ca.pem",
+				"--client-allowed-names=front-proxy-client",
+				"--backend-identity-mode=impersonation",
+				"--backend-impersonation-extra-keys=scopes",
+				"--backend-impersonation-forward-all-extras=true",
+			},
+			want: "--backend-impersonation-extra-keys and --backend-impersonation-forward-all-extras are mutually exclusive",
+		},
+		{
+			name: "impersonation only flag rejected in requestheader mode",
+			args: []string{
+				"--backend-url=http://backend.local",
+				"--webhook-kubeconfig=/tmp/webhook.kubeconfig",
+				"--backend-impersonation-extra-keys=scopes",
+			},
+			want: "--backend-impersonation-extra-keys requires --backend-identity-mode=impersonation",
+		},
 	}
 
 	for _, tc := range testCases {
@@ -106,6 +176,72 @@ func TestParseFlags_Validation(t *testing.T) {
 			assert.EqualError(t, err, tc.want)
 		})
 	}
+}
+
+func TestParseFlags_ImpersonationMode_Accepted(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseFlags([]string{
+		"--backend-url=http://backend.local",
+		"--webhook-kubeconfig=/tmp/webhook.kubeconfig",
+		"--tls-cert-file=/tmp/tls.crt",
+		"--tls-private-key-file=/tmp/tls.key",
+		"--client-ca-file=/tmp/client-ca.pem",
+		"--client-allowed-names=front-proxy-client,aggregator",
+		"--backend-identity-mode=impersonation",
+		"--backend-impersonation-token-file=/tmp/token",
+		"--backend-impersonation-extra-keys=scopes,example.com/tenant",
+		"--backend-impersonation-forward-uid=false",
+	}, io.Discard)
+	require.NoError(t, err)
+
+	assert.Equal(t, "impersonation", cfg.backendIdentityMode)
+	assert.Equal(t, "front-proxy-client,aggregator", cfg.clientAllowedNames)
+	assert.Equal(t, "/tmp/token", cfg.backendImpersonationTokenFile)
+	assert.Equal(t, "scopes,example.com/tenant", cfg.backendImpersonationExtraKeys)
+	assert.False(t, cfg.backendImpersonationForwardUID)
+	assert.False(t, cfg.backendImpersonationForwardAllExtras)
+}
+
+func TestParseFlags_RequestHeaderMode_AllowedNamesAccepted(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseFlags([]string{
+		"--backend-url=http://backend.local",
+		"--webhook-kubeconfig=/tmp/webhook.kubeconfig",
+		"--client-allowed-names=front-proxy-client",
+	}, io.Discard)
+	require.NoError(t, err)
+
+	assert.Equal(t, "requestheader", cfg.backendIdentityMode)
+	assert.Equal(t, "front-proxy-client", cfg.clientAllowedNames)
+}
+
+func TestWrapImpersonationTransport_MissingTokenFile(t *testing.T) {
+	t.Parallel()
+
+	_, err := wrapImpersonationTransport(http.DefaultTransport, filepath.Join(t.TempDir(), "missing-token"))
+	require.Error(t, err)
+}
+
+func TestWrapImpersonationTransport_ReadsExistingTokenFile(t *testing.T) {
+	t.Parallel()
+
+	tokenPath := filepath.Join(t.TempDir(), "token")
+	require.NoError(t, os.WriteFile(tokenPath, []byte("a-token"), 0o600))
+
+	roundTripper, err := wrapImpersonationTransport(http.DefaultTransport, tokenPath)
+	require.NoError(t, err)
+	assert.NotNil(t, roundTripper)
+}
+
+func TestSplitCommaList(t *testing.T) {
+	t.Parallel()
+
+	assert.Nil(t, splitCommaList(""))
+	assert.Nil(t, splitCommaList("  "))
+	assert.Equal(t, []string{"a", "b", "c"}, splitCommaList("a, b ,c"))
+	assert.Equal(t, []string{"a", "b"}, splitCommaList("a,,b,"))
 }
 
 func TestBuildBackendTransport_Validation(t *testing.T) {

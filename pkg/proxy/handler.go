@@ -32,6 +32,7 @@ type HandlerConfig struct {
 	IdentityExtractor *identity.Extractor
 	Logger            *slog.Logger
 	Transport         http.RoundTripper
+	BackendIdentity   BackendIdentity
 	MaxAuditBodyBytes int64
 	TempDir           string
 }
@@ -39,16 +40,30 @@ type HandlerConfig struct {
 // Handler proxies requests to the real aggregated backend and emits
 // ResponseComplete audit events for supported mutating requests.
 type Handler struct {
-	backendURL  *url.URL
-	webhook     webhook.Sender
-	identity    *identity.Extractor
-	logger      *slog.Logger
-	transport   http.RoundTripper
-	builder     *auditevents.Builder
-	resolver    requestinfo.RequestInfoResolver
-	passthrough *httputil.ReverseProxy
-	tempDir     string
-	captureMax  int64
+	backendURL      *url.URL
+	webhook         webhook.Sender
+	identity        *identity.Extractor
+	logger          *slog.Logger
+	transport       http.RoundTripper
+	backendIdentity BackendIdentity
+	builder         *auditevents.Builder
+	resolver        requestinfo.RequestInfoResolver
+	passthrough     *httputil.ReverseProxy
+	tempDir         string
+	captureMax      int64
+}
+
+// userInfoContextKey is the typed context key carrying the verified delegated
+// identity into the passthrough ReverseProxy Rewrite hook.
+type userInfoContextKey struct{}
+
+func contextWithUserInfo(parent context.Context, user authnv1.UserInfo) context.Context {
+	return context.WithValue(parent, userInfoContextKey{}, user)
+}
+
+func userInfoFromContext(ctx context.Context) (authnv1.UserInfo, bool) {
+	user, ok := ctx.Value(userInfoContextKey{}).(authnv1.UserInfo)
+	return user, ok
 }
 
 // NewHandler creates a new proxy handler.
@@ -72,34 +87,53 @@ func NewHandler(cfg HandlerConfig) (*Handler, error) {
 	identityExtractor := cfg.IdentityExtractor
 	if identityExtractor == nil {
 		var err error
-		identityExtractor, err = identity.NewExtractor("")
+		identityExtractor, err = identity.NewExtractor("", nil)
 		if err != nil {
 			return nil, fmt.Errorf("build identity extractor: %w", err)
 		}
 	}
 
-	reverseProxy := httputil.NewSingleHostReverseProxy(cfg.BackendURL)
-	reverseProxy.Transport = transport
-	reverseProxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		logger.Error("passthrough proxy request failed", "error", err, "path", r.URL.Path)
-		http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
+	backendIdentity := cfg.BackendIdentity
+	if backendIdentity == nil {
+		backendIdentity = RequestHeaderForwarder{}
 	}
 
-	return &Handler{
-		backendURL: cfg.BackendURL,
-		webhook:    cfg.WebhookClient,
-		identity:   identityExtractor,
-		logger:     logger,
-		transport:  transport,
-		builder:    auditevents.NewBuilder(cfg.MaxAuditBodyBytes),
+	handler := &Handler{
+		backendURL:      cfg.BackendURL,
+		webhook:         cfg.WebhookClient,
+		identity:        identityExtractor,
+		logger:          logger,
+		transport:       transport,
+		backendIdentity: backendIdentity,
+		builder:         auditevents.NewBuilder(cfg.MaxAuditBodyBytes),
 		resolver: &requestinfo.RequestInfoFactory{
 			APIPrefixes:          sets.NewString("api", "apis"),
 			GrouplessAPIPrefixes: sets.NewString("api"),
 		},
-		passthrough: reverseProxy,
-		tempDir:     cfg.TempDir,
-		captureMax:  cfg.MaxAuditBodyBytes,
-	}, nil
+		tempDir:    cfg.TempDir,
+		captureMax: cfg.MaxAuditBodyBytes,
+	}
+
+	handler.passthrough = &httputil.ReverseProxy{
+		Transport: transport,
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(cfg.BackendURL)
+			// SetURL does not touch X-Forwarded-*. Set X-Forwarded-For
+			// explicitly via the shared helper so the passthrough path matches
+			// the audited path exactly; deliberately not SetXForwarded, which
+			// would also inject X-Forwarded-Host and X-Forwarded-Proto.
+			appendForwardedFor(pr.Out.Header, pr.In.RemoteAddr)
+			if user, ok := userInfoFromContext(pr.In.Context()); ok {
+				handler.backendIdentity.Apply(pr.Out, user)
+			}
+		},
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			logger.Error("passthrough proxy request failed", "error", err, "path", r.URL.Path)
+			http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
+		},
+	}
+
+	return handler, nil
 }
 
 // ServeHTTP proxies the request and, for supported mutating resource verbs,
@@ -117,6 +151,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
 		return
 	}
+
+	r = r.WithContext(contextWithUserInfo(r.Context(), userInfo))
 
 	info, err := h.resolver.NewRequestInfo(r)
 	if err != nil {
@@ -159,7 +195,7 @@ func (h *Handler) serveAudited(
 		return
 	}
 
-	upstreamRequest := h.buildUpstreamRequest(r, upstreamBody, requestBody.size)
+	upstreamRequest := h.buildUpstreamRequest(r, upstreamBody, requestBody.size, userInfo)
 
 	response, err := h.transport.RoundTrip(upstreamRequest)
 	if err != nil {
@@ -245,6 +281,7 @@ func (h *Handler) buildUpstreamRequest(
 	r *http.Request,
 	body io.ReadCloser,
 	contentLength int64,
+	userInfo authnv1.UserInfo,
 ) *http.Request {
 	upstreamURL := h.backendURL.ResolveReference(&url.URL{
 		Path:     r.URL.Path,
@@ -260,6 +297,7 @@ func (h *Handler) buildUpstreamRequest(
 	upstreamRequest.ContentLength = contentLength
 	upstreamRequest.Header = stripHopByHopHeaders(upstreamRequest.Header.Clone())
 	appendForwardedFor(upstreamRequest.Header, r.RemoteAddr)
+	h.backendIdentity.Apply(upstreamRequest, userInfo)
 
 	return upstreamRequest
 }

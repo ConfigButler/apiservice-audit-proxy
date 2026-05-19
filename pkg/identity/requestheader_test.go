@@ -38,7 +38,7 @@ func TestExtractor_FromRequest_VerifiesClientCertificateWhenConfigured(t *testin
 	t.Parallel()
 
 	caFile, clientCertificate := writeClientCAFixture(t, "front-proxy-ca", "kube-aggregator")
-	extractor, err := NewExtractor(caFile)
+	extractor, err := NewExtractor(caFile, nil)
 	require.NoError(t, err)
 
 	request := &http.Request{
@@ -62,7 +62,7 @@ func TestExtractor_FromRequest_RejectsMissingClientCertificateWhenConfigured(t *
 	t.Parallel()
 
 	caFile, _ := writeClientCAFixture(t, "front-proxy-ca", "kube-aggregator")
-	extractor, err := NewExtractor(caFile)
+	extractor, err := NewExtractor(caFile, nil)
 	require.NoError(t, err)
 
 	userInfo, ok, err := extractor.FromRequest(&http.Request{
@@ -73,6 +73,45 @@ func TestExtractor_FromRequest_RejectsMissingClientCertificateWhenConfigured(t *
 	require.NoError(t, err)
 	assert.False(t, ok)
 	assert.Empty(t, userInfo.Username)
+}
+
+func TestExtractor_FromRequest_TrustsOnlyAllowedClientNames(t *testing.T) {
+	t.Parallel()
+
+	caFile, clientCertificate := writeClientCAFixture(t, "front-proxy-ca", "kube-aggregator")
+
+	request := func() *http.Request {
+		return &http.Request{
+			Header: http.Header{
+				"X-Remote-User":  {"alice"},
+				"X-Remote-Group": {"devs"},
+			},
+			TLS: &tls.ConnectionState{
+				PeerCertificates: []*x509.Certificate{clientCertificate},
+			},
+		}
+	}
+
+	t.Run("common name in allowlist is trusted", func(t *testing.T) {
+		t.Parallel()
+		extractor, err := NewExtractor(caFile, []string{"kube-aggregator"})
+		require.NoError(t, err)
+
+		userInfo, ok, err := extractor.FromRequest(request())
+		require.NoError(t, err)
+		assert.True(t, ok)
+		assert.Equal(t, "alice", userInfo.Username)
+	})
+
+	t.Run("common name outside allowlist is rejected", func(t *testing.T) {
+		t.Parallel()
+		extractor, err := NewExtractor(caFile, []string{"some-other-client"})
+		require.NoError(t, err)
+
+		userInfo, ok, _ := extractor.FromRequest(request())
+		assert.False(t, ok)
+		assert.Empty(t, userInfo.Username)
+	})
 }
 
 func writeClientCAFixture(t *testing.T, caCommonName, clientCommonName string) (string, *x509.Certificate) {

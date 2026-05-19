@@ -1,0 +1,56 @@
+{{- if .Values.backend.impersonation.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "apiservice-audit-proxy.fullname" . }}-impersonator
+  labels:
+    {{- include "apiservice-audit-proxy.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources:
+      - users
+      - groups
+      - serviceaccounts
+    verbs:
+      - impersonate
+  {{- if .Values.backend.impersonation.forwardUid }}
+  - apiGroups:
+      - authentication.k8s.io
+    resources:
+      - uids
+    verbs:
+      - impersonate
+  {{- end }}
+  {{- if .Values.backend.impersonation.forwardAllExtras }}
+  - apiGroups:
+      - authentication.k8s.io
+    resources:
+      - "*"
+    verbs:
+      - impersonate
+  {{- else if .Values.backend.impersonation.extraKeys }}
+  - apiGroups:
+      - authentication.k8s.io
+    resources:
+      {{- range .Values.backend.impersonation.extraKeys }}
+      - {{ printf "userextras/%s" . | quote }}
+      {{- end }}
+    verbs:
+      - impersonate
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "apiservice-audit-proxy.fullname" . }}-impersonator
+  labels:
+    {{- include "apiservice-audit-proxy.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "apiservice-audit-proxy.fullname" . }}-impersonator
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "apiservice-audit-proxy.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

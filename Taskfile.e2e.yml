@@ -121,6 +121,31 @@ tasks:
     cmds:
       - "CTX={{.CTX}} WEBHOOK_TESTER_BASE_URL={{.WEBHOOK_TESTER_BASE_URL}} go test -tags=e2e -run 'TestSmoke' -count=1 -v ./test/e2e"
 
+  e2e:test-impersonation:
+    desc: |
+      Run the impersonation-mode scenarios (audited write, non-audited
+      passthrough, apiserver-injected extras) with operator-supplied RBAC.
+    cmds:
+      # E2E_PROXY_VALUES_FILE must be exported into a fresh task process: a
+      # `vars:` override on a dep does not propagate to that dep's own nested
+      # dependencies, so the deploy step would otherwise use the default values.
+      - E2E_PROXY_VALUES_FILE=test/e2e/values/proxy-impersonation.yaml task e2e:portforward-webhook-tester
+      - |
+        CTX={{.CTX}} WEBHOOK_TESTER_BASE_URL={{.WEBHOOK_TESTER_BASE_URL}} \
+          go test -tags=e2e \
+          -run 'TestImpersonationWrite|TestImpersonationPassthrough|TestImpersonationApiserverExtras' \
+          -count=1 -v ./test/e2e
+
+  e2e:test-impersonation-no-rbac:
+    desc: |
+      Run the impersonation-mode missing-RBAC scenario: a write must fail with a
+      clean 403 cannot-impersonate error proxied from the backend.
+    cmds:
+      - E2E_PROXY_VALUES_FILE=test/e2e/values/proxy-impersonation-no-rbac.yaml task e2e:portforward-webhook-tester
+      - |
+        CTX={{.CTX}} WEBHOOK_TESTER_BASE_URL={{.WEBHOOK_TESTER_BASE_URL}} \
+          go test -tags=e2e -run 'TestImpersonationRBACMissing' -count=1 -v ./test/e2e
+
   e2e:test-image-refresh:
     desc: Validate image load → pod digest chain (cluster required; runs after smoke)
     cmds:
