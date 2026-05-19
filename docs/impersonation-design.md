@@ -1,9 +1,12 @@
 # Design: backend impersonation mode for `apiservice-audit-proxy`
 
-This document describes a proposed `apiservice-audit-proxy` improvement:
-support Kubernetes impersonation on the proxy-to-backend hop.
+This document describes the design behind the implemented
+`apiservice-audit-proxy` backend impersonation mode. Sections such as
+"Current behavior" and "Proposed behavior" preserve the design chronology from
+before the feature landed; use [`HELM_VALUES.md`](HELM_VALUES.md) for the
+operator-facing configuration guide.
 
-The immediate target is the Cozystack flow:
+The immediate target is the CozyStack flow:
 
 ```text
 kube-apiserver -> apiservice-audit-proxy -> cozystack-api
@@ -30,12 +33,12 @@ In the new mode:
 5. The backend authorizes the proxy ServiceAccount to impersonate the requested
    user through normal Kubernetes RBAC.
 
-For Cozystack, this avoids:
+For CozyStack, this avoids:
 
 - a backend client cert signed by the cluster aggregator CA,
 - a copied kube-apiserver proxy-client cert,
 - a dedicated `cozystack-api` requestheader CA bundle, and
-- live patches to a Cozystack-managed control-plane Deployment.
+- live patches to a CozyStack-managed control-plane Deployment.
 
 ## Current behavior
 
@@ -506,9 +509,9 @@ Notes:
   visible in Kubernetes RBAC and scoped to authentication impersonation rather
   than to trusted requestheader injection.
 
-## Cozystack compatibility
+## CozyStack compatibility
 
-This should not require a Cozystack chart or `cozystack-api` code change.
+This should not require a CozyStack chart or `cozystack-api` code change.
 
 `cozystack-api` is built on Kubernetes recommended API server options. In the
 live cluster, a direct request to `cozystack-api` with the proxy ServiceAccount
@@ -722,7 +725,7 @@ New Taskfile tasks mirror `e2e:test-smoke`: `e2e:test-impersonation`
 2. Add the CLI flags with `requestheader` as the default.
 3. Add chart values and optional RBAC templates.
 4. Test against the existing sample-apiserver demo.
-5. Test against Cozystack with no backend client cert and explicit
+5. Test against CozyStack with no backend client cert and explicit
    impersonation RBAC.
 6. Document the mode in the upstream proxy README and keep requestheader mode
    as the default until the new path has an end-to-end lane.

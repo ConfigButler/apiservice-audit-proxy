@@ -44,11 +44,14 @@ In the local demo, the aggregated backend is the Wardle sample-apiserver and the
 receiver is webhook-tester. In a `gitops-reverser` deployment, gitops-reverser
 is the audit webhook receiver.
 
-The proxy preserves delegated `X-Remote-*` identity, forwards the request to the
+The proxy preserves the effective delegated user, forwards the request to the
 real backend, observes the response, and emits one best-effort
-`ResponseComplete` audit event. TLS, backend mTLS, requestheader client CA
+`ResponseComplete` audit event. Backend identity can be forwarded as
+requestheader `X-Remote-*` headers or translated into Kubernetes
+`Impersonate-*` headers. TLS, backend mTLS, requestheader client CA
 verification, and webhook delivery are covered in
-[Connections and TLS](docs/CONNECTIONS_AND_TLS.md).
+[Connections and TLS](docs/CONNECTIONS_AND_TLS.md); chart choices are summarized
+in the [Helm values guide](docs/HELM_VALUES.md).
 
 ## Example Audit Output
 
@@ -117,6 +120,14 @@ helm template apiservice-audit-proxy charts/apiservice-audit-proxy \
 Local e2e uses `test/e2e/values/` for the same Helm-managed demo backend and
 receiver, plus k3d-specific image and requestheader CA wiring.
 
+The default backend identity mode is `backend.identity.mode=requestheader`.
+Use `backend.identity.mode=impersonation` when the backend can authorize
+Kubernetes impersonation and you want to avoid provisioning a backend client
+certificate private key to this chart, for example on platforms where the
+frontend proxy key is owned elsewhere. See the
+[Helm values guide](docs/HELM_VALUES.md#backend-identity-modes) for when to use
+each mode.
+
 ## Limits
 
 This is not a full `k8s.io/apiserver` or `kube-aggregator` replacement. It is
@@ -127,6 +138,7 @@ best-effort: webhook delivery does not fail the proxied API request.
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Connections and TLS](docs/CONNECTIONS_AND_TLS.md)
+- [Helm values guide](docs/HELM_VALUES.md)
 - [Why this exists](docs/WHY.md)
 - [E2E setup notes](docs/E2E_SETUP_LESSONS.md)
 - [Helm chart values](charts/apiservice-audit-proxy/values.yaml)
