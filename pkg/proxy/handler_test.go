@@ -296,6 +296,131 @@ func TestHandler_RequiresVerifiedDelegatedIdentity_WhenClientCAConfigured(t *tes
 	})
 }
 
+func TestHandler_AuditedPath_PreservesBackendErrorStatus(t *testing.T) {
+	t.Parallel()
+
+	// Checklist D: a backend denial must be returned faithfully to the client
+	// and never converted into a proxy-level success. The emitted audit event
+	// must also record the backend's real status code.
+	const forbiddenBody = `{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"Forbidden","code":403}`
+
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(forbiddenBody))
+	}))
+	defer backend.Close()
+
+	webhookClient := &fakeWebhookClient{delivered: make(chan auditv1.EventList, 1)}
+	backendURL, err := url.Parse(backend.URL)
+	require.NoError(t, err)
+
+	handler, err := NewHandler(HandlerConfig{
+		BackendURL:        backendURL,
+		WebhookClient:     webhookClient,
+		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		MaxAuditBodyBytes: 4096,
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"http://proxy.local/apis/wardle.example.com/v1alpha1/namespaces/default/flunders",
+		strings.NewReader(`{"metadata":{"name":"audit-probe","namespace":"default"}}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Remote-User", "alice")
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	resp := recorder.Result()
+	defer func() {
+		require.NoError(t, resp.Body.Close())
+	}()
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	assert.JSONEq(t, forbiddenBody, string(body))
+
+	select {
+	case delivered := <-webhookClient.delivered:
+		require.Len(t, delivered.Items, 1)
+		require.NotNil(t, delivered.Items[0].ResponseStatus)
+		assert.EqualValues(t, http.StatusForbidden, delivered.Items[0].ResponseStatus.Code)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for webhook delivery")
+	}
+}
+
+func TestHandler_AuditedPath_ForwardsRequestFaithfully(t *testing.T) {
+	t.Parallel()
+
+	// Checklist D: method, path, query string, body, and content type must reach
+	// the backend unchanged — the proxy must not introduce hidden semantic edits.
+	const requestBody = `{"metadata":{"name":"audit-probe","namespace":"default"}}`
+
+	backendRequests := make(chan *http.Request, 1)
+	backendBodies := make(chan string, 1)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		assert.NoError(t, err)
+		backendBodies <- string(body)
+		backendRequests <- r.Clone(context.Background())
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer backend.Close()
+
+	webhookClient := &fakeWebhookClient{delivered: make(chan auditv1.EventList, 1)}
+	backendURL, err := url.Parse(backend.URL)
+	require.NoError(t, err)
+
+	handler, err := NewHandler(HandlerConfig{
+		BackendURL:        backendURL,
+		WebhookClient:     webhookClient,
+		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		MaxAuditBodyBytes: 4096,
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(
+		http.MethodPatch,
+		"http://proxy.local/apis/wardle.example.com/v1alpha1/namespaces/default/flunders/audit-probe"+
+			"?fieldManager=kubectl&dryRun=All&fieldValidation=Strict",
+		strings.NewReader(requestBody),
+	)
+	req.Header.Set("Content-Type", "application/merge-patch+json")
+	req.Header.Set("X-Remote-User", "alice")
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	assert.Equal(t, http.StatusOK, recorder.Code)
+
+	select {
+	case backendRequest := <-backendRequests:
+		assert.Equal(t, http.MethodPatch, backendRequest.Method)
+		assert.Equal(t,
+			"/apis/wardle.example.com/v1alpha1/namespaces/default/flunders/audit-probe",
+			backendRequest.URL.Path,
+		)
+		assert.Equal(t, "fieldManager=kubectl&dryRun=All&fieldValidation=Strict", backendRequest.URL.RawQuery)
+		assert.Equal(t, "application/merge-patch+json", backendRequest.Header.Get("Content-Type"))
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for backend request")
+	}
+
+	select {
+	case body := <-backendBodies:
+		assert.JSONEq(t, requestBody, body)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for backend body")
+	}
+}
+
 type fakeWebhookClient struct {
 	delivered chan auditv1.EventList
 	sendErr   error

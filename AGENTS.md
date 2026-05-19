@@ -108,12 +108,17 @@ e2e:test-smoke
      └─ e2e:deploy-proxy
          ├─ e2e:load-image
          │   └─ e2e:build-image      (builds apiservice-audit-proxy:e2e-local)
-         ├─ e2e:prepare-requestheader-client-ca
+         ├─ e2e:_services-ready
          │   └─ e2e:flux-bootstrap
          │       └─ e2e:cluster-up
          └─ Helm testApiserver.enabled=true + webhookTester.enabled=true
              └─ chart-generated webhook kubeconfig Secret
 ```
+
+Inbound requestheader trust is sourced live from the cluster's
+`kube-system/extension-apiserver-authentication` ConfigMap, so there is no
+CA-copy step: the chart's kube-system RoleBinding grants the proxy
+ServiceAccount read access.
 
 ### What `e2e:flux-bootstrap` installs
 

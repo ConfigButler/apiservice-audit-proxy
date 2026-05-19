@@ -1,0 +1,29 @@
+{{/*
+Inbound requestheader trust binding.
+
+The proxy reads the front-proxy CA, the accepted client common names, and the
+identity header names from the cluster's kube-system/extension-apiserver-authentication
+ConfigMap. Kubernetes ships the built-in extension-apiserver-authentication-reader
+Role in kube-system for exactly this read; the proxy always needs it, so this
+RoleBinding is always rendered.
+
+Note: this RoleBinding is created in kube-system, not the release namespace, so
+the Helm installer needs permission to create a RoleBinding there. That is an
+expected requirement for a cluster-integrated aggregated API component — an RBAC
+denial at install time means the installer lacks that cluster-level permission.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "apiservice-audit-proxy.fullname" . }}-auth-reader
+  namespace: kube-system
+  labels:
+    {{- include "apiservice-audit-proxy.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: extension-apiserver-authentication-reader
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "apiservice-audit-proxy.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}

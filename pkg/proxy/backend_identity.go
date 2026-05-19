@@ -23,13 +23,22 @@ type BackendIdentity interface {
 	Apply(req *http.Request, user authnv1.UserInfo)
 }
 
-// RequestHeaderForwarder is the default no-op BackendIdentity. It leaves the
-// cloned inbound requestheader identity headers untouched, preserving the
-// proxy's historical requestheader-forwarding behavior on the backend hop.
+// RequestHeaderForwarder is the default BackendIdentity. It forwards the
+// front-proxy's X-Remote-* identity headers to the backend unchanged, so the
+// backend's requestheader authentication still sees the original delegated
+// user.
+//
+// It is not a pure pass-through: it strips inbound Impersonate-* and
+// Authorization headers. Those are never part of the requestheader-forwarding
+// contract, so a client must not be able to smuggle them through the proxy to
+// the backend.
 type RequestHeaderForwarder struct{}
 
-// Apply does nothing: the inbound X-Remote-* headers are forwarded as-is.
-func (RequestHeaderForwarder) Apply(*http.Request, authnv1.UserInfo) {}
+// Apply strips inbound Impersonate-* and Authorization headers while leaving
+// the X-Remote-* requestheader identity in place for the backend hop.
+func (RequestHeaderForwarder) Apply(req *http.Request, _ authnv1.UserInfo) {
+	stripImpersonationHeaders(req.Header)
+}
 
 // ImpersonatorConfig configures an Impersonator.
 type ImpersonatorConfig struct {
@@ -94,17 +103,36 @@ func (i *Impersonator) Apply(req *http.Request, user authnv1.UserInfo) {
 }
 
 // stripInboundIdentityHeaders removes every X-Remote-*, Impersonate-*, and
-// Authorization header from the request.
+// Authorization header from the request. The Impersonator uses this to drop
+// the whole inbound identity surface before setting its own controlled values.
+func stripInboundIdentityHeaders(header http.Header) {
+	deleteHeadersFunc(header, func(canonical string) bool {
+		return canonical == "Authorization" ||
+			strings.HasPrefix(canonical, "X-Remote-") ||
+			strings.HasPrefix(canonical, "Impersonate-")
+	})
+}
+
+// stripImpersonationHeaders removes every Impersonate-* and Authorization
+// header while leaving X-Remote-* identity headers intact. The
+// RequestHeaderForwarder uses this so a client cannot smuggle impersonation or
+// bearer credentials through the requestheader-forwarding path.
+func stripImpersonationHeaders(header http.Header) {
+	deleteHeadersFunc(header, func(canonical string) bool {
+		return canonical == "Authorization" ||
+			strings.HasPrefix(canonical, "Impersonate-")
+	})
+}
+
+// deleteHeadersFunc deletes every header whose canonicalized key satisfies
+// match.
 //
 // http.Header.Del matches a single canonicalized key, so a fixed Del list
 // cannot cover the open-ended X-Remote-Extra-* and Impersonate-Extra-* keys.
-// This scans every header key by prefix instead.
-func stripInboundIdentityHeaders(header http.Header) {
+// Scanning every header key by predicate covers those prefixes instead.
+func deleteHeadersFunc(header http.Header, match func(canonical string) bool) {
 	for key := range header {
-		canonical := http.CanonicalHeaderKey(key)
-		if canonical == "Authorization" ||
-			strings.HasPrefix(canonical, "X-Remote-") ||
-			strings.HasPrefix(canonical, "Impersonate-") {
+		if match(http.CanonicalHeaderKey(key)) {
 			delete(header, key)
 		}
 	}

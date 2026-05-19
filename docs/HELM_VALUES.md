@@ -50,12 +50,15 @@ backend:
   clientCertSecretName: proxy-backend-client-cert
   identity:
     mode: requestheader
-
-requestHeader:
-  clientCASecretName: cluster-requestheader-client-ca
-  allowedNames:
-    - system:auth-proxy
 ```
+
+Inbound requestheader trust needs no configuration: the proxy reads the
+front-proxy CA, the accepted client names, and the identity header names from
+the cluster's `kube-system/extension-apiserver-authentication` ConfigMap. The
+chart always renders a kube-system RoleBinding to the built-in
+`extension-apiserver-authentication-reader` Role so the proxy ServiceAccount can
+read it. Installing the chart therefore needs permission to create a
+RoleBinding in `kube-system`.
 
 ### `impersonation`
 
@@ -76,9 +79,9 @@ chart rejects that combination today so the identity model stays clear.
 
 Requirements:
 
-- `requestHeader.clientCASecretName` must be set.
-- `requestHeader.allowedNames` must pin the kube-apiserver/front-proxy client
-  certificate common name.
+- Inbound requestheader trust is cluster-sourced and always verified, so
+  impersonation mode needs no inbound trust configuration. The accepted
+  front-proxy client names come from the cluster's `requestheader-allowed-names`.
 - The proxy ServiceAccount must be allowed to impersonate the users, groups,
   UIDs, and optional extras it forwards.
 
@@ -98,11 +101,6 @@ backend:
         mode: none
       rbac:
         create: true
-
-requestHeader:
-  clientCASecretName: cluster-requestheader-client-ca
-  allowedNames:
-    - system:auth-proxy
 ```
 
 For tightly managed clusters, leave

@@ -116,16 +116,27 @@ func TestImpersonator_Apply_ForwardUIDFalse(t *testing.T) {
 	assert.Equal(t, "alice", req.Header.Get("Impersonate-User"))
 }
 
-func TestRequestHeaderForwarder_Apply_IsNoOp(t *testing.T) {
+func TestRequestHeaderForwarder_Apply_StripsImpersonationKeepsRemoteIdentity(t *testing.T) {
 	t.Parallel()
 
 	req := newInboundRequest()
 	RequestHeaderForwarder{}.Apply(req, sampleUser())
 
-	// The forwarder must leave the inbound headers untouched.
+	// The front-proxy's X-Remote-* identity is the legitimate requestheader
+	// contract and must reach the backend unchanged, including the open-ended
+	// extra key.
 	assert.Equal(t, "evil", req.Header.Get("X-Remote-User"))
-	assert.Equal(t, "Bearer user-supplied-token", req.Header.Get("Authorization"))
-	assert.Equal(t, "evil", req.Header.Get("Impersonate-User"))
+	assert.Equal(t, "evil-group", req.Header.Get("X-Remote-Group"))
+	assert.Equal(t, "evil-uid", req.Header.Get("X-Remote-Uid"))
+	assert.Equal(t, "value", req.Header.Get("X-Remote-Extra-Injected"))
+	// Inbound Impersonate-* and Authorization are never part of that contract;
+	// a client must not be able to smuggle them through the proxy.
+	assert.Empty(t, req.Header.Get("Authorization"))
+	assert.Empty(t, req.Header.Get("Impersonate-User"))
+	assert.Empty(t, req.Header.Get("Impersonate-Group"))
+	assert.Empty(t, req.Header.Values("Impersonate-Extra-Injected"))
+	// Headers unrelated to identity survive.
+	assert.Equal(t, "application/json", req.Header.Get("Content-Type"))
 }
 
 func TestHeaderKeyEscape_MatchesKubernetes(t *testing.T) {

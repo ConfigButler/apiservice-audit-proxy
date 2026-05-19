@@ -26,9 +26,6 @@ testApiserver:
     caIssuerName: audit-pass-through-backend-client-ca-issuer
     clientSecretName: audit-pass-through-backend-client-cert
 
-requestHeader:
-  clientCASecretName: audit-pass-through-requestheader-client-ca
-
 webhook:
   kubeconfigSecretName: audit-pass-through-webhook-kubeconfig
 

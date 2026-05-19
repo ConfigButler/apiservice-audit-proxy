@@ -42,8 +42,8 @@ In scope:
 - delegated requestheader identity capture
 - backend identity modes: `requestheader` and `impersonation`
 - backend TLS validation and backend mTLS
-- optional front-proxy client certificate verification with
-  `--client-ca-file`
+- mandatory front-proxy client certificate verification, with trust sourced
+  from the `extension-apiserver-authentication` ConfigMap
 
 Out of scope:
 
@@ -53,6 +53,61 @@ Out of scope:
 - durable retry or backpressure management
 - full `k8s.io/apiserver` parity
 - full kube-aggregator requestheader policy emulation
+
+## Design Decision: An Interceptor, Not An API Server
+
+Registered through an `APIService`, this proxy *is* an aggregated API server in
+Kubernetes' eyes — the same category as the backend it fronts. It is, however,
+a deliberately **degenerate** one: it serves no API of its own, owns no
+resources, and stores nothing. It is an interceptor on the aggregation hop, not
+an executor. That nature drives two conscious choices.
+
+### Built as a reverse proxy, not on `genericapiserver`
+
+A backend such as `cozystack-api` or `sample-apiserver` is built on
+`k8s.io/apiserver`'s `genericapiserver` / `RecommendedOptions` machinery
+because it implements an API: it needs discovery, OpenAPI, admission, REST
+storage, and a handler chain that ends in a resource handler.
+
+This proxy needs none of that — it forwards bytes. Building it on
+`genericapiserver` would mean using a small fraction of the framework and
+suppressing the rest, and the default handler chain unconditionally includes
+`WithImpersonation` and `WithAuthorization`, both of which are wrong for a
+transparent forwarder (see below). Stripping them requires a custom
+`BuildHandlerChainFunc`, at which point the chain is hand-rolled anyway.
+
+So the proxy is a plain `http.Server` plus `httputil.ReverseProxy`. From the
+standard `k8s.io/apiserver` packages it adopts only the piece that genuinely
+applies: the `headerrequest` authenticator for inbound requestheader trust. Its
+planned evolution toward cluster-sourced trust configuration is covered in
+[requestheader-trust-design.md](requestheader-trust-design.md).
+
+### Inbound contract is requestheader only — by design
+
+The proxy's one legitimate caller is the front kube-apiserver, which reaches it
+through the `APIService` aggregation hop and presents delegated `X-Remote-*`
+identity. The proxy deliberately does **not**:
+
+- process inbound `Impersonate-*` headers — they are stripped, never honored;
+- accept direct bearer-token callers as an authentication path.
+
+This is not a missing feature. A backend like `cozystack-api` accepts bearer
+tokens and processes impersonation because it is the *executor* — direct
+clients, controllers, and health probes authenticate to it. This proxy sits
+*inside* the aggregation path; copying that permissiveness would:
+
+- be **redundant** — the backend already runs `WithImpersonation`, so a
+  proxy-side impersonation check only repeats the same `SubjectAccessReview`;
+- make the proxy an **authorizer**, which it deliberately is not — see
+  [background-authz.md](background-authz.md) section C;
+- open a **direct-access path** that bypasses the front kube-apiserver's own
+  authentication and authorization, granting no capability a caller does not
+  already have by calling the backend directly.
+
+A component that wants to act as itself with impersonation can call the backend
+directly — that is ordinary Kubernetes impersonation and needs no proxy. This
+proxy's value is auditing the aggregation hop, and it delivers that without
+becoming a general-purpose identity endpoint.
 
 ## Request Flow
 
@@ -72,27 +127,36 @@ Out of scope:
 ## Identity And Trust Model
 
 The canonical actor identity surface at the proxy boundary is the delegated
-requestheader path:
+requestheader path. The exact header names are whatever the cluster publishes
+in `kube-system/extension-apiserver-authentication`; in practice:
 
 - `X-Remote-User`
 - `X-Remote-Uid`
 - `X-Remote-Group`
 - `X-Remote-Extra-*`
 
-Current trust model:
+Inbound trust model:
 
-- if `--client-ca-file` is not configured, the proxy reads delegated identity
-  headers without extra certificate verification
-- if `--client-ca-file` is configured, the proxy only trusts delegated identity
-  when the inbound front-proxy client certificate validates against that CA
-  bundle
-- if `--client-allowed-names` is configured, the proxy also pins the accepted
-  client certificate common names
-- `--backend-identity-mode=requestheader` forwards the verified `X-Remote-*`
-  identity to the backend
-- `--backend-identity-mode=impersonation` strips inbound identity and
-  authorization headers, then calls the backend with the proxy ServiceAccount
-  bearer token plus proxy-controlled `Impersonate-*` headers
+- The proxy sources its requestheader trust — the front-proxy CA bundle, the
+  allowed client common names, and the identity header names — live from the
+  cluster's `kube-system/extension-apiserver-authentication` ConfigMap, the
+  same configuration kube-apiserver publishes for every aggregated API server.
+  See [requestheader-trust-design.md](requestheader-trust-design.md).
+- Delegated `X-Remote-*` identity is trusted only when the inbound front-proxy
+  client certificate validates against that CA bundle and, where the cluster
+  pins them, carries an allowed common name. There is no unverified path: the
+  proxy fails startup if the trust configuration cannot be read.
+- Trust is dynamic — when the cluster rotates the aggregator CA, the proxy
+  adopts the new bundle without a restart.
+
+Outbound identity model:
+
+- `requestheader` mode forwards the verified `X-Remote-*` identity to the
+  backend, stripping any `Impersonate-*` and `Authorization` headers a caller
+  may have supplied.
+- `impersonation` mode strips the inbound identity and authorization surface,
+  then calls the backend with the proxy ServiceAccount bearer token plus
+  proxy-controlled `Impersonate-*` headers.
 
 Current limitation:
 
@@ -139,6 +203,8 @@ There are three independent trust relationships:
 1. kube-apiserver to this proxy
    - serving TLS on the proxy
    - `APIService` trust through CA bundle or dev-only skip-verify mode
+   - the inbound front-proxy client certificate, verified against the
+     cluster-sourced requestheader CA before delegated identity is trusted
 2. this proxy to the real aggregated backend
    - backend server validation through `--backend-ca-file` or
      `--backend-insecure-skip-verify`

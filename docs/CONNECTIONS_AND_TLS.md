@@ -77,32 +77,27 @@ from a verified kube-apiserver/front-proxy client.
 ```text
 kube-apiserver  --->  apiservice-audit-proxy
                  request has X-Remote-* headers
-                 proxy verifies client cert against requestHeader CA
+                 proxy verifies client cert against the cluster's
+                 requestheader CA (read from a ConfigMap)
 ```
 
-The chart control is:
+There is **no chart control and no Secret** for this. The proxy sources its
+inbound trust — the front-proxy CA bundle, the accepted client common names
+(`requestheader-allowed-names`), and the identity header names — live from the
+cluster's `kube-system/extension-apiserver-authentication` ConfigMap, the same
+object every aggregated API server reads. The chart's kube-system RoleBinding
+(`templates/auth-reader-rbac.yaml`) grants the proxy ServiceAccount read access.
 
-```yaml
-requestHeader:
-  clientCASecretName: audit-pass-through-requestheader-client-ca
-  clientCAFileName: ca.crt
-  allowedNames:
-    - system:auth-proxy
-```
+The inbound serving TLS uses `tls.RequestClientCert`: the TLS layer requests a
+client certificate but does not verify it. The requestheader x509 verifier,
+backed by the cluster's dynamic CA, is the single inbound trust authority. A
+request whose client certificate is missing or does not chain to the current
+requestheader CA carries no verified identity and is rejected by the handler.
 
-When set, the proxy receives:
-
-```text
---client-ca-file=/var/run/audit-pass-through/requestheader-client-ca/ca.crt
-```
-
-This is not the proxy's serving certificate. It is the CA used to decide whether
-the incoming client is allowed to provide delegated identity headers.
-`allowedNames` narrows that trust to specific client certificate common names.
-It is optional in `requestheader` mode and required in `impersonation` mode.
-
-In local e2e, `task e2e:prepare-requestheader-client-ca` copies the cluster's
-requestheader client CA into the proxy namespace before Helm installs the proxy.
+Because the trust comes from the cluster, aggregator CA rotation is picked up
+live, with no restart and no Secret update. There is no flag whose omission
+yields an unverified proxy; the insecure mode was deleted, not defaulted-off.
+See [`requestheader-trust-design.md`](requestheader-trust-design.md).
 
 ## 3. Proxy to Backend
 

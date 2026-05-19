@@ -18,6 +18,10 @@ import (
 	"syscall"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	clientgotransport "k8s.io/client-go/transport"
 
 	"github.com/ConfigButler/apiservice-audit-proxy/pkg/identity"
@@ -33,6 +37,14 @@ const (
 	defaultShutdownTimeout  = 10 * time.Second
 	defaultWebhookTimeout   = 5 * time.Second
 	defaultMaxAuditBodySize = int64(1024 * 1024)
+
+	// requestHeaderTrustStartupTimeout bounds the strict initial load of
+	// requestheader trust from the cluster ConfigMap. If no usable trust
+	// snapshot is available within this window, startup fails.
+	requestHeaderTrustStartupTimeout = 30 * time.Second
+	// requestHeaderTrustPollInterval is how often the strict startup gate
+	// rechecks for a usable trust snapshot.
+	requestHeaderTrustPollInterval = 100 * time.Millisecond
 
 	backendIdentityModeRequestHeader = "requestheader"
 	backendIdentityModeImpersonation = "impersonation"
@@ -52,8 +64,6 @@ type config struct {
 	backendClientCertFile                string
 	backendClientKeyFile                 string
 	backendServerName                    string
-	clientCAFile                         string
-	clientAllowedNames                   string
 	backendIdentityMode                  string
 	backendImpersonationTokenFile        string
 	backendImpersonationExtraKeys        string
@@ -103,9 +113,26 @@ func main() {
 		})
 	}
 
-	identityExtractor, err := identity.NewExtractor(cfg.clientCAFile, splitCommaList(cfg.clientAllowedNames))
+	// stop is intentionally not deferred: the fatal paths below call os.Exit,
+	// which would skip the defer anyway. It is released on the shutdown path.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+
+	kubeClient, err := buildKubeClient()
 	if err != nil {
-		logger.Error("unable to initialize requestheader identity extractor", "error", err)
+		logger.Error("unable to build in-cluster Kubernetes client", "error", err)
+		os.Exit(1)
+	}
+
+	identityExtractor, trustController, err := identity.NewClusterExtractor(kubeClient)
+	if err != nil {
+		logger.Error("unable to initialize cluster requestheader identity extractor", "error", err)
+		os.Exit(1)
+	}
+
+	// Strict startup gate: the proxy must not serve until it has a usable,
+	// cluster-sourced trust snapshot. There is no unverified fallback.
+	if err := startRequestHeaderTrust(ctx, logger, kubeClient, trustController); err != nil {
+		logger.Error("unable to establish requestheader trust from cluster", "error", err)
 		os.Exit(1)
 	}
 
@@ -132,7 +159,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.Handle("/livez", http.HandlerFunc(handleHealth))
-	mux.Handle("/readyz", http.HandlerFunc(handleHealth))
+	mux.Handle("/readyz", readinessHandler(trustController))
 	mux.Handle("/", handler)
 
 	server := &http.Server{
@@ -142,11 +169,7 @@ func main() {
 		WriteTimeout: defaultWriteTimeout,
 		IdleTimeout:  defaultIdleTimeout,
 	}
-	server.TLSConfig, err = buildServingTLSConfig(cfg)
-	if err != nil {
-		logger.Error("unable to configure serving TLS", "error", err)
-		os.Exit(1)
-	}
+	server.TLSConfig = buildServingTLSConfig(cfg)
 
 	logger.Info(
 		"starting audit pass-through API server prototype",
@@ -157,8 +180,8 @@ func main() {
 		"backend_client_cert_file", cfg.backendClientCertFile,
 		"backend_client_key_file", cfg.backendClientKeyFile,
 		"backend_server_name", cfg.backendServerName,
-		"client_ca_file", cfg.clientCAFile,
-		"client_allowed_names", cfg.clientAllowedNames,
+		"requestheader_trust_source", fmt.Sprintf("%s/%s",
+			identity.AuthenticationConfigMapNamespace, identity.AuthenticationConfigMapName),
 		"backend_identity_mode", cfg.backendIdentityMode,
 		"backend_impersonation_token_file", cfg.backendImpersonationTokenFile,
 		"backend_impersonation_extra_keys", cfg.backendImpersonationExtraKeys,
@@ -172,11 +195,9 @@ func main() {
 		"tls_private_key_file", cfg.tlsPrivateKeyFile,
 	)
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
 	go func() {
 		<-ctx.Done()
+		stop()
 
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), defaultShutdownTimeout)
 		defer cancel()
@@ -187,7 +208,7 @@ func main() {
 
 	if err := serve(server, cfg); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("server exited with error", "error", err)
-		os.Exit(1) //nolint:gocritic // exitAfterDefer: stop() not running on os.Exit is acceptable in main
+		os.Exit(1)
 	}
 }
 
@@ -227,18 +248,6 @@ func parseFlags(args []string, stderr io.Writer) (config, error) {
 		"backend-server-name",
 		"",
 		"Optional TLS server name override for HTTPS backend verification.",
-	)
-	fs.StringVar(
-		&cfg.clientCAFile,
-		"client-ca-file",
-		"",
-		"PEM bundle used to verify the front-proxy client certificate before trusting delegated X-Remote-* headers.",
-	)
-	fs.StringVar(
-		&cfg.clientAllowedNames,
-		"client-allowed-names",
-		"",
-		"Comma-separated list of accepted client certificate common names. Empty trusts any name under --client-ca-file.",
 	)
 	fs.StringVar(
 		&cfg.backendIdentityMode,
@@ -333,11 +342,10 @@ func parseFlags(args []string, stderr io.Writer) (config, error) {
 
 // validateBackendIdentityFlags enforces the backend identity mode rules.
 //
-// Impersonation mode turns verified X-Remote-* headers into authorized backend
-// impersonation, so it requires both a verified inbound client certificate and
-// a pinned set of accepted client common names. Backend client certificate
-// flags are rejected in impersonation mode to keep the identity model
-// unambiguous in this first implementation.
+// Inbound requestheader trust is always cluster-sourced and always verified, so
+// impersonation mode no longer asserts any inbound trust flags. Backend client
+// certificate flags are rejected in impersonation mode to keep the identity
+// model unambiguous in this first implementation.
 func validateBackendIdentityFlags(cfg config, setFlags map[string]bool) error {
 	switch cfg.backendIdentityMode {
 	case backendIdentityModeRequestHeader, backendIdentityModeImpersonation:
@@ -362,12 +370,6 @@ func validateBackendIdentityFlags(cfg config, setFlags map[string]bool) error {
 		return nil
 	}
 
-	if cfg.clientCAFile == "" {
-		return errors.New("--backend-identity-mode=impersonation requires --client-ca-file")
-	}
-	if cfg.clientAllowedNames == "" {
-		return errors.New("--backend-identity-mode=impersonation requires a non-empty --client-allowed-names")
-	}
 	if cfg.backendClientCertFile != "" || cfg.backendClientKeyFile != "" {
 		return errors.New(
 			"--backend-client-cert-file and --backend-client-key-file are not yet supported " +
@@ -418,6 +420,106 @@ func handleHealth(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte("ok"))
 }
 
+// readinessHandler reports ready only once the proxy holds a usable,
+// cluster-sourced requestheader trust snapshot. A transient loss of the watch
+// does not flip it back: the controller retains last-known-good trust.
+func readinessHandler(controller *identity.RequestHeaderTrustController) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if !controller.Ready() {
+			http.Error(w, "requestheader trust not ready", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+}
+
+// buildKubeClient builds an in-cluster Kubernetes client. The proxy runs as a
+// ServiceAccount and reads its inbound trust from a cluster ConfigMap, so a
+// working in-cluster client is a hard startup prerequisite.
+func buildKubeClient() (kubernetes.Interface, error) {
+	restConfig, err := rest.InClusterConfig()
+	if err != nil {
+		return nil, fmt.Errorf("build in-cluster Kubernetes client config: %w", err)
+	}
+
+	client, err := kubernetes.NewForConfig(restConfig)
+	if err != nil {
+		return nil, fmt.Errorf("build in-cluster Kubernetes client: %w", err)
+	}
+
+	return client, nil
+}
+
+// startRequestHeaderTrust performs the strict initial trust load and starts the
+// background watch. It fails loudly if the proxy cannot establish a usable,
+// cluster-sourced trust snapshot: there is no unverified fallback.
+func startRequestHeaderTrust(
+	ctx context.Context,
+	logger *slog.Logger,
+	client kubernetes.Interface,
+	controller *identity.RequestHeaderTrustController,
+) error {
+	startupCtx, cancel := context.WithTimeout(ctx, requestHeaderTrustStartupTimeout)
+	defer cancel()
+
+	// Explicit Get for diagnostics: the dynamic controllers swallow CA load
+	// errors, so a bare Get is what surfaces *why* trust is missing — a missing
+	// RoleBinding (Forbidden) versus an absent ConfigMap (NotFound).
+	configMapRef := fmt.Sprintf("%s/%s",
+		identity.AuthenticationConfigMapNamespace, identity.AuthenticationConfigMapName)
+	_, err := client.CoreV1().ConfigMaps(identity.AuthenticationConfigMapNamespace).
+		Get(startupCtx, identity.AuthenticationConfigMapName, metav1.GetOptions{})
+	switch {
+	case apierrors.IsForbidden(err):
+		return fmt.Errorf("cannot read %s: the proxy ServiceAccount needs a RoleBinding to the "+
+			"kube-system extension-apiserver-authentication-reader Role: %w", configMapRef, err)
+	case apierrors.IsNotFound(err):
+		return fmt.Errorf("%s not found: the cluster does not publish requestheader trust: %w",
+			configMapRef, err)
+	case err != nil:
+		return fmt.Errorf("read %s: %w", configMapRef, err)
+	}
+
+	// RunOnce surfaces denied RBAC and malformed requestheader header JSON
+	// immediately, before the watch is even started.
+	if err := controller.RunOnce(startupCtx); err != nil {
+		return fmt.Errorf("initial requestheader trust load from %s: %w", configMapRef, err)
+	}
+
+	// Start the watch so the CA bundle — loaded via the informer — can populate
+	// and so later rotation is adopted without a restart.
+	go controller.Run(ctx, 1)
+
+	// Gate on a usable trust snapshot: a parsed CA bundle and a non-empty
+	// username-header list. Without it the proxy cannot verify anyone.
+	if err := waitForTrust(startupCtx, controller); err != nil {
+		return fmt.Errorf("requestheader trust from %s never became usable "+
+			"(missing CA bundle, username headers, or RBAC): %w", configMapRef, err)
+	}
+
+	logger.Info("requestheader trust loaded from cluster ConfigMap", "configmap", configMapRef)
+	return nil
+}
+
+// waitForTrust blocks until the controller reports a usable trust snapshot or
+// ctx expires.
+func waitForTrust(ctx context.Context, controller *identity.RequestHeaderTrustController) error {
+	ticker := time.NewTicker(requestHeaderTrustPollInterval)
+	defer ticker.Stop()
+
+	for {
+		if controller.Ready() {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
 func serve(server *http.Server, cfg config) error {
 	if cfg.tlsCertFile == "" {
 		return server.ListenAndServe()
@@ -427,36 +529,31 @@ func serve(server *http.Server, cfg config) error {
 }
 
 func validateServingTLSFlags(cfg config) error {
-	hasCert := cfg.tlsCertFile != ""
-	hasKey := cfg.tlsPrivateKeyFile != ""
-	if hasCert == hasKey {
-		if cfg.clientCAFile != "" && !hasCert {
-			return errors.New("--client-ca-file requires --tls-cert-file and --tls-private-key-file")
-		}
+	if (cfg.tlsCertFile != "") == (cfg.tlsPrivateKeyFile != "") {
 		return nil
 	}
 
 	return errors.New("--tls-cert-file and --tls-private-key-file must be provided together")
 }
 
-func buildServingTLSConfig(cfg config) (*tls.Config, error) {
+// buildServingTLSConfig configures the inbound serving TLS.
+//
+// ClientAuth is tls.RequestClientCert: the TLS layer asks for a client
+// certificate but does not itself verify the chain. The requestheader x509
+// verifier — backed by the controller's dynamic, cluster-sourced CA — is the
+// single inbound trust authority, so there is no static ClientCAs pool to drift
+// out of sync. A certless connection still completes the handshake; a certless
+// or untrusted-cert request simply carries no verified identity and is rejected
+// by the handler.
+func buildServingTLSConfig(cfg config) *tls.Config {
 	if cfg.tlsCertFile == "" {
-		return nil, nil //nolint:nilnil // nil config signals plain-HTTP mode; not an error
+		return nil
 	}
 
-	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
-	if cfg.clientCAFile == "" {
-		return tlsConfig, nil
+	return &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		ClientAuth: tls.RequestClientCert,
 	}
-
-	clientCAs, err := loadStaticCertPool(cfg.clientCAFile, "client CA")
-	if err != nil {
-		return nil, err
-	}
-
-	tlsConfig.ClientAuth = tls.VerifyClientCertIfGiven
-	tlsConfig.ClientCAs = clientCAs
-	return tlsConfig, nil
 }
 
 func validateBackendClientTLSFlags(cfg config) error {
@@ -532,20 +629,6 @@ func loadKeyPair(certPath, keyPath string) (tls.Certificate, error) {
 	}
 
 	return certificate, nil
-}
-
-func loadStaticCertPool(path, bundleName string) (*x509.CertPool, error) {
-	pemBytes, err := os.ReadFile(filepath.Clean(path))
-	if err != nil {
-		return nil, fmt.Errorf("read %s file: %w", bundleName, err)
-	}
-
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(pemBytes) {
-		return nil, fmt.Errorf("parse %s file: no certificates found", bundleName)
-	}
-
-	return pool, nil
 }
 
 func loadCertPool(path string) (*x509.CertPool, error) {

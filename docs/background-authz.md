@@ -410,6 +410,9 @@ The aggregation docs describe exactly this validation responsibility for extensi
 
 #### Read trust configuration from extension-apiserver-authentication
 
+> **Status: done.** The proxy sources its inbound trust live from this
+> ConfigMap. See [`requestheader-trust-design.md`](requestheader-trust-design.md).
+
 Your aggregated-apiserver-proxy should use the Kubernetes-published configuration where possible:
 
 ```
@@ -423,9 +426,18 @@ kube-system/configmap/extension-apiserver-authentication
 
 The docs say kube-apiserver creates this ConfigMap and that extension apiservers use it to validate requests.
 
+The proxy reads it through the standard upstream dynamic controllers
+(`dynamiccertificates.NewDynamicCAFromConfigMapController` plus
+`headerrequest.NewRequestHeaderAuthRequestController`), so aggregator CA
+rotation is adopted live. There is no per-install CA file, CA Secret, or
+allowed-names list, and no flag whose omission produces an unverified proxy.
+
 #### Bind extension-apiserver-authentication-reader
 
-Your aggregated-apiserver-proxy's service account needs permission to read that ConfigMap. Kubernetes provides the `extension-apiserver-authentication-reader` role in `kube-system` for this purpose.
+> **Status: done.** The chart always renders this RoleBinding
+> (`templates/auth-reader-rbac.yaml`).
+
+Your aggregated-apiserver-proxy's service account needs permission to read that ConfigMap. Kubernetes provides the `extension-apiserver-authentication-reader` role in `kube-system` for this purpose. The proxy fails startup loudly if it cannot read the ConfigMap — a missing RoleBinding is a clear `Forbidden` startup error, never a silent fallback to unverified trust.
 
 #### Do not reuse the normal client CA as the requestheader CA
 
