@@ -1,15 +1,24 @@
 FROM golang:1.26.3-bookworm AS ci
 
+# Finding the latest versions:
+# KUBECTL_VERSION -> https://github.com/kubernetes/kubernetes/releases
+# KUSTOMIZE_VERSION -> https://github.com/kubernetes-sigs/kustomize/releases
+# KUBEBUILDER_VERSION -> https://github.com/kubernetes-sigs/kubebuilder
+# GOLANGCI_LINT_VERSION -> https://github.com/golangci/golangci-lint/releases
+# K3D_VERSION -> https://github.com/k3d-io/k3d (seems a bit stsale?)
+# FLUX_VERSION -> https://github.com/fluxcd/flux2
+# TASK_VERSION -> https://github.com/go-task/task/releases
+
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PATH="/go/bin:/usr/local/go/bin:${PATH}" \
-    KUBECTL_VERSION=v1.35.3 \
+    KUBECTL_VERSION=v1.36.1 \
     KUSTOMIZE_VERSION=5.8.1 \
-    KUBEBUILDER_VERSION=4.13.1 \
-    GOLANGCI_LINT_VERSION=v2.11.4 \
+    KUBEBUILDER_VERSION=4.14.0 \
+    GOLANGCI_LINT_VERSION=v2.12.2 \
     HELM_VERSION=v4.1.4 \
     K3D_VERSION=v5.8.3 \
-    FLUX_VERSION=2.8.5 \
-    TASK_VERSION=v3.49.1
+    FLUX_VERSION=2.8.7 \
+    TASK_VERSION=v3.51.1
 
 RUN apt-get update \
     && apt-get -y install --no-install-recommends \
