@@ -77,6 +77,15 @@ task e2e:test-smoke
 # Same but with explicit backend CA validation enabled
 task e2e:test-smoke-backend-ca
 
+# Impersonation-mode scenarios with operator-supplied RBAC
+task e2e:test-impersonation
+
+# Impersonation-mode missing-RBAC scenario
+task e2e:test-impersonation-no-rbac
+
+# Aggregated API audit-gap regression guard
+task e2e:test-audit-gap
+
 # Bring the cluster up without running tests
 task e2e:cluster-up
 
@@ -137,7 +146,7 @@ See [test/e2e/cluster/README.md](test/e2e/cluster/README.md) for details.
 
 ## Code Conventions
 
-- **Go version**: see `go.mod` (`go 1.26.2`)
+- **Go version**: see `go.mod` (`go 1.26.3`)
 - **No generated files** in version control; `controller-gen` outputs are
   committed but regenerated with `controller-gen` when CRD types change
 - **Imports**: grouped as stdlib / external / internal, formatted with
@@ -177,7 +186,14 @@ The chart lives in `charts/apiservice-audit-proxy/`. Key notes:
   reviews every change before it lands; stage files at most, and leave the
   commit to them. This applies even when a task seems obviously done.
 - Run `task ci` and confirm it passes before asking for a commit
-- For e2e changes, run `task e2e:test-smoke` and confirm `--- PASS: TestSmoke`
+- For e2e, chart, proxy request handling, audit, TLS, or identity changes, run
+  the live e2e lanes before asking for a commit:
+  `task e2e:test-smoke`, `task e2e:test-audit-gap`,
+  `task e2e:test-impersonation`, and `task e2e:test-impersonation-no-rbac`.
+  Confirm the relevant `--- PASS:` lines, including `TestSmoke`,
+  `TestAggregatedAPIAuditGap`, the three impersonation happy-path tests, and
+  `TestImpersonationRBACMissing`. Also run `task e2e:test-smoke-backend-ca`
+  when backend CA validation or its Taskfile wiring changes.
 - You may freely run `kubectl`, `task`, `helm`, `docker`, and `gh` (read-only,
   e.g. `gh run list`, `gh run view`) to investigate and iterate locally
 - Keep commits focused; reference the issue or context in the commit body

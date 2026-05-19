@@ -4,7 +4,7 @@ package e2e
 
 // Impersonation-mode end-to-end scenarios.
 //
-// These exercise the proxy running with backend.identityMode=impersonation:
+// These exercise the proxy running with backend.identity.mode=impersonation:
 // the proxy authenticates the inbound delegated identity, then calls the
 // backend as its own ServiceAccount with Impersonate-* headers.
 //
@@ -208,9 +208,9 @@ spec:
 	cancelWatch()
 }
 
-// TestImpersonationApiserverExtras — scenario 4: with an empty extraKeys
-// allowlist a write still succeeds, even though a normal kubectl request
-// carries apiserver-injected extras such as
+// TestImpersonationApiserverExtras — scenario 4: with extras.mode=none a write
+// still succeeds, even though a normal kubectl request carries
+// apiserver-injected extras such as
 // authentication.kubernetes.io/credential-id. Success proves the proxy dropped
 // the un-allowlisted extras rather than requiring userextras RBAC for them.
 func TestImpersonationApiserverExtras(t *testing.T) {

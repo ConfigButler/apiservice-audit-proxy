@@ -114,11 +114,11 @@ tasks:
 
   e2e:test-smoke-backend-ca:
     desc: Run the smoke scenario with backend TLS validated by an explicit CA bundle
-    deps:
-      - task: e2e:portforward-webhook-tester
-        vars:
-          E2E_PROXY_VALUES_FILE: test/e2e/values/proxy-cert-manager-backend-ca.yaml
     cmds:
+      # E2E_PROXY_VALUES_FILE must be exported into a fresh task process: a
+      # `vars:` override on a dep does not propagate to that dep's own nested
+      # dependencies, so the deploy step would otherwise use the default values.
+      - E2E_PROXY_VALUES_FILE=test/e2e/values/proxy-cert-manager-backend-ca.yaml task e2e:portforward-webhook-tester
       - "CTX={{.CTX}} WEBHOOK_TESTER_BASE_URL={{.WEBHOOK_TESTER_BASE_URL}} go test -tags=e2e -run 'TestSmoke' -count=1 -v ./test/e2e"
 
   e2e:test-impersonation:
