@@ -9,6 +9,11 @@ aggregated API requests: `objectRef.name`, `requestObject`, and
 `responseObject`. This is the gap `gitops-reverser` needs closed when consuming
 audit webhooks for `APIService`-backed APIs.
 
+The project was written for GitOps Reverser, where body-rich audit events are
+used as an input to reverse-GitOps workflows. The proxy is not coupled to
+GitOps Reverser, though: it can send synthetic Kubernetes audit events to any
+receiver that accepts audit webhook payloads.
+
 ## How It Fits
 
 In production, the proxy is the registered `APIService` backend from the
@@ -52,6 +57,15 @@ requestheader `X-Remote-*` headers or translated into Kubernetes
 verification, and webhook delivery are covered in
 [Connections and TLS](docs/CONNECTIONS_AND_TLS.md); chart choices are summarized
 in the [Helm values guide](docs/HELM_VALUES.md).
+
+For platforms that already own their `APIService` objects, such as CozyStack,
+leave `server.apiService.enabled=false` and let the platform install layer
+redirect the existing `APIService` objects to the proxy Service with the
+matching proxy serving CA. The proxy still forwards to the original backend,
+for example `cozystack-api`, and the chart only needs the backend URL, backend
+TLS trust, impersonation RBAC, serving certificate, and audit webhook Secret.
+See the [CozyStack case study](docs/case-study-cozystack.md) for the exact
+trust and RBAC shape.
 
 ## Example Audit Output
 

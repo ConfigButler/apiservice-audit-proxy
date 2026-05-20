@@ -7,7 +7,7 @@ deployment succeeds.
 
 It is a worked example of the general model in
 [`background-authz.md`](background-authz.md) and
-[`impersonation-design.md`](impersonation-design.md). The CozyStack sources
+[`ARCHITECTURE.md`](ARCHITECTURE.md). The CozyStack sources
 analysed are vendored under
 [`external-resources/cozystack`](../external-resources/cozystack) (upstream
 `github.com/cozystack/cozystack`, `k8s.io/apiserver v0.34.1`).
@@ -54,8 +54,8 @@ cozystack-api  (Service cozystack-api.cozy-system.svc:443)
 `cozystack-api`'s own `APIService` objects
 ([`apiservice.yaml`](../external-resources/cozystack/packages/system/cozystack-api/templates/apiservice.yaml))
 point `Service: cozystack-api / cozy-system`. To front CozyStack the proxy
-takes that role for **both** groups; see
-[Knob: APIService registration](#5-apiservice-registration-both-groups).
+takes over the Service target for **both** existing groups; see
+[Knob: APIService handoff](#5-apiservice-handoff-both-groups).
 
 ## Evidence: `cozystack-api` is a generic apiserver
 
@@ -243,20 +243,44 @@ e2e scenario `TestImpersonationApiserverExtras` confirms a write still succeeds
 with `mode: none` despite the injected extras. Use `allowlist` only for a
 specific key CozyStack genuinely consumes; avoid `all`.
 
-#### 5. APIService registration (both groups)
+#### 5. APIService handoff (both groups)
 
-The proxy must be registered as the `APIService` target for **both** CozyStack
-groups, replacing CozyStack's own registrations:
+CozyStack already creates the `APIService` objects. The proxy chart should not
+try to own replacement definitions for them. Instead, install the proxy with
+`server.apiService.enabled=false` and have the CozyStack-facing install layer
+patch CozyStack's existing APIService objects so kube-apiserver sends those
+groups to the proxy Service:
 
 - `v1alpha1.apps.cozystack.io`
 - `v1alpha1.core.cozystack.io`
 
-The chart's `apiService` block renders a single group/version. Fronting
-CozyStack needs two `APIService` objects, both pointing at the proxy Service;
-render the second via an extra manifest or a values override. kube-apiserver
-also needs to trust the proxy's serving certificate — set the `APIService`
-`caBundle` (or `cert-manager.io/inject-ca-from`), and configure the proxy's own
-serving cert through the chart `certificates` block.
+Only the `spec.service` target and kube-apiserver-to-proxy CA trust need to
+change. Preserve CozyStack's existing group, version, and priority fields.
+
+```yaml
+server:
+  apiService:
+    enabled: false
+```
+
+For each CozyStack `APIService`, the external install guide should set:
+
+- `spec.service.name`: the proxy Service name
+- `spec.service.namespace`: the proxy release namespace
+- `spec.service.port`: the proxy Service port, normally `443`
+- `spec.caBundle`: the CA that signs the proxy serving certificate, or
+  `cert-manager.io/inject-ca-from` pointing at the proxy serving Certificate
+
+With the chart's default `server.tls.mode=self-signed`, the CA is stored as
+`ca.crt` in the proxy serving TLS Secret. With `server.tls.mode=cert-manager`,
+the install layer can either copy the injected CA into the existing CozyStack
+APIService objects or annotate those objects for cert-manager injection. With
+`server.tls.mode=existing-secret`, the external Secret owner also owns the
+matching APIService CA wiring.
+
+This is not a multi-backend problem: both CozyStack API groups are served by
+the same `cozystack-api` Service, and the request path carries the group. One
+proxy `backend.url` is still correct.
 
 #### 6. What stays the backend's job
 
@@ -296,9 +320,11 @@ failing" from "front aggregation auth is failing".
    `kube-system/extension-apiserver-authentication` through the chart's
    auth-reader RoleBinding (Knob 3).
 5. `extras.mode=none` unless a specific extra is required (Knob 4).
-6. Two `APIService` objects (`apps` + `core`) point at the proxy Service with a
-   valid `caBundle` (Knob 5).
-7. Smoke test: a tenant `get`/`create` on a CozyStack resource succeeds, and the
+6. `server.apiService.enabled=false` in this chart, because CozyStack already
+   owns its `APIService` objects.
+7. CozyStack's two existing `APIService` objects (`apps` + `core`) point at the
+   proxy Service with valid kube-apiserver-to-proxy CA trust (Knob 5).
+8. Smoke test: a tenant `get`/`create` on a CozyStack resource succeeds, and the
    audit event records the **tenant** identity, never the proxy ServiceAccount.
 
 ## References
@@ -309,5 +335,5 @@ failing" from "front aggregation auth is failing".
   [`auth-reader.yaml`](../external-resources/cozystack/packages/system/cozystack-api/templates/auth-reader.yaml)
 - TLS `ClientAuth`: `k8s.io/apiserver/pkg/server/secure_serving.go:75-79`
 - Background and checklist: [`background-authz.md`](background-authz.md)
-- Impersonation design: [`impersonation-design.md`](impersonation-design.md)
-- Inbound trust roadmap: [`requestheader-trust-design.md`](requestheader-trust-design.md)
+- Current architecture: [`ARCHITECTURE.md`](ARCHITECTURE.md)
+- Operator-facing values: [`HELM_VALUES.md`](HELM_VALUES.md)

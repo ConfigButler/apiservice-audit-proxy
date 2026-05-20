@@ -411,7 +411,8 @@ The aggregation docs describe exactly this validation responsibility for extensi
 #### Read trust configuration from extension-apiserver-authentication
 
 > **Status: done.** The proxy sources its inbound trust live from this
-> ConfigMap. See [`requestheader-trust-design.md`](requestheader-trust-design.md).
+> ConfigMap; see [ARCHITECTURE.md](ARCHITECTURE.md) and
+> [CONNECTIONS_AND_TLS.md](CONNECTIONS_AND_TLS.md).
 
 Your aggregated-apiserver-proxy should use the Kubernetes-published configuration where possible:
 

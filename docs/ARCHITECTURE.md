@@ -4,7 +4,7 @@ This project is a small pass-through aggregated API server that sits in front
 of a real aggregated backend and emits richer synthetic audit events for
 mutating requests.
 
-For the upstream rationale behind this approach, see [WHY.md](../WHY.md).
+For the upstream rationale behind this approach, see [WHY.md](WHY.md).
 
 ## Purpose
 
@@ -79,8 +79,8 @@ transparent forwarder (see below). Stripping them requires a custom
 So the proxy is a plain `http.Server` plus `httputil.ReverseProxy`. From the
 standard `k8s.io/apiserver` packages it adopts only the piece that genuinely
 applies: the `headerrequest` authenticator for inbound requestheader trust. Its
-planned evolution toward cluster-sourced trust configuration is covered in
-[requestheader-trust-design.md](requestheader-trust-design.md).
+trust configuration is sourced from the cluster's standard
+`extension-apiserver-authentication` ConfigMap.
 
 ### Inbound contract is requestheader only — by design
 
@@ -141,7 +141,6 @@ Inbound trust model:
   allowed client common names, and the identity header names — live from the
   cluster's `kube-system/extension-apiserver-authentication` ConfigMap, the
   same configuration kube-apiserver publishes for every aggregated API server.
-  See [requestheader-trust-design.md](requestheader-trust-design.md).
 - Delegated `X-Remote-*` identity is trusted only when the inbound front-proxy
   client certificate validates against that CA bundle and, where the cluster
   pins them, carries an allowed common name. There is no unverified path: the
