@@ -74,8 +74,8 @@ spec:
           args:
             - --listen-address={{ .Values.listenAddress }}
             - --backend-url={{ required "backend.url is required" .Values.backend.url }}
-            - --webhook-kubeconfig={{ include "apiservice-audit-proxy.paths.webhook" . }}/{{ .Values.webhook.kubeconfigKey }}
-            - --webhook-timeout={{ .Values.webhook.timeout }}
+            - --webhook-kubeconfig={{ include "apiservice-audit-proxy.paths.webhook" . }}/{{ .Values.audit.webhook.kubeconfigKey }}
+            - --webhook-timeout={{ .Values.audit.webhook.timeout }}
             - --max-audit-body-bytes={{ .Values.audit.maxBodyBytes | int }}
             {{- if .Values.backend.insecureSkipVerify }}
             - --backend-insecure-skip-verify
@@ -157,7 +157,7 @@ spec:
           emptyDir: {}
         - name: webhook-kubeconfig
           secret:
-            secretName: {{ required "webhook.kubeconfigSecretName is required" .Values.webhook.kubeconfigSecretName }}
+            secretName: {{ required "audit.webhook.kubeconfigSecretName is required" .Values.audit.webhook.kubeconfigSecretName }}
         - name: serving-tls
           secret:
             secretName: {{ include "apiservice-audit-proxy.servingSecretName" . }}

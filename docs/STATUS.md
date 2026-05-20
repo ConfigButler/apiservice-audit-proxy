@@ -75,7 +75,7 @@ chart-managed webhook-tester receiver.
 
 | Phase | Item | State | Notes |
 |---|---|---|---|
-| 1a | `testApiserver` (sample-apiserver) as optional Helm sub-deployment | Done | Gated on `testApiserver.enabled`; e2e and `values-demo.yaml` use the chart-managed backend |
+| 1a | `backend.testApiserver` (sample-apiserver) as optional Helm sub-deployment | Done | Gated on `backend.testApiserver.enabled`; e2e and `values-demo.yaml` use the chart-managed backend |
 | 1b | `mockAuditWebhook` as optional Helm sub-deployment | Superseded | webhook-tester is the chosen receiver |
 | 1 | `demo.enabled` convenience preset | Not started | Depends on deciding what a Helm-only demo should include |
 | 2 | Add SSE stream + embedded HTML viewer to `mock-audit-webhook` | Superseded | webhook-tester now provides the live UI |

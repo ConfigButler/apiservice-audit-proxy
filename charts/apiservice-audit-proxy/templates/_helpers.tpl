@@ -161,11 +161,11 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 testApiserver resource names and labels.
 */}}
 {{- define "apiservice-audit-proxy.testApiserver.fullname" -}}
-{{- default (printf "%s-test-apiserver" (include "apiservice-audit-proxy.fullname" .)) .Values.testApiserver.nameOverride | trunc 63 | trimSuffix "-" }}
+{{- default (printf "%s-test-apiserver" (include "apiservice-audit-proxy.fullname" .)) .Values.backend.testApiserver.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{- define "apiservice-audit-proxy.testApiserver.serviceAccountName" -}}
-{{- default (include "apiservice-audit-proxy.testApiserver.fullname" .) .Values.testApiserver.serviceAccount.name | trunc 63 | trimSuffix "-" }}
+{{- default (include "apiservice-audit-proxy.testApiserver.fullname" .) .Values.backend.testApiserver.serviceAccount.name | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{- define "apiservice-audit-proxy.testApiserver.selectorLabels" -}}
@@ -196,41 +196,41 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
 {{- define "apiservice-audit-proxy.testApiserver.selfSignedIssuerName" -}}
-{{- default (printf "%s-backend-selfsigned" (include "apiservice-audit-proxy.fullname" .)) .Values.testApiserver.backendClientCert.selfSignedIssuerName | trunc 63 | trimSuffix "-" }}
+{{- default (printf "%s-backend-selfsigned" (include "apiservice-audit-proxy.fullname" .)) .Values.backend.testApiserver.backendClientCert.selfSignedIssuerName | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{- define "apiservice-audit-proxy.testApiserver.clientCASecretName" -}}
-{{- default (printf "%s-backend-client-ca" (include "apiservice-audit-proxy.fullname" .)) .Values.testApiserver.backendClientCert.caSecretName | trunc 63 | trimSuffix "-" }}
+{{- default (printf "%s-backend-client-ca" (include "apiservice-audit-proxy.fullname" .)) .Values.backend.testApiserver.backendClientCert.caSecretName | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{- define "apiservice-audit-proxy.testApiserver.clientCAIssuerName" -}}
-{{- default (printf "%s-backend-client-ca" (include "apiservice-audit-proxy.fullname" .)) .Values.testApiserver.backendClientCert.caIssuerName | trunc 63 | trimSuffix "-" }}
+{{- default (printf "%s-backend-client-ca" (include "apiservice-audit-proxy.fullname" .)) .Values.backend.testApiserver.backendClientCert.caIssuerName | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{- define "apiservice-audit-proxy.testApiserver.clientCertSecretName" -}}
-{{- default (printf "%s-backend-client-cert" (include "apiservice-audit-proxy.fullname" .)) .Values.testApiserver.backendClientCert.clientSecretName | trunc 63 | trimSuffix "-" }}
+{{- default (printf "%s-backend-client-cert" (include "apiservice-audit-proxy.fullname" .)) .Values.backend.testApiserver.backendClientCert.clientSecretName | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{- define "apiservice-audit-proxy.testApiserver.servingSelfSignedIssuerName" -}}
-{{- default (printf "%s-backend-serving-selfsigned" (include "apiservice-audit-proxy.fullname" .)) .Values.testApiserver.backendServingCert.selfSignedIssuerName | trunc 63 | trimSuffix "-" }}
+{{- default (printf "%s-backend-serving-selfsigned" (include "apiservice-audit-proxy.fullname" .)) .Values.backend.testApiserver.backendServingCert.selfSignedIssuerName | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{- define "apiservice-audit-proxy.testApiserver.servingCASecretName" -}}
-{{- default (printf "%s-backend-serving-ca" (include "apiservice-audit-proxy.fullname" .)) .Values.testApiserver.backendServingCert.caSecretName | trunc 63 | trimSuffix "-" }}
+{{- default (printf "%s-backend-serving-ca" (include "apiservice-audit-proxy.fullname" .)) .Values.backend.testApiserver.backendServingCert.caSecretName | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{- define "apiservice-audit-proxy.testApiserver.servingCAIssuerName" -}}
-{{- default (printf "%s-backend-serving-ca" (include "apiservice-audit-proxy.fullname" .)) .Values.testApiserver.backendServingCert.caIssuerName | trunc 63 | trimSuffix "-" }}
+{{- default (printf "%s-backend-serving-ca" (include "apiservice-audit-proxy.fullname" .)) .Values.backend.testApiserver.backendServingCert.caIssuerName | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{- define "apiservice-audit-proxy.testApiserver.servingCertSecretName" -}}
-{{- default (printf "%s-backend-serving-cert" (include "apiservice-audit-proxy.fullname" .)) .Values.testApiserver.backendServingCert.certSecretName | trunc 63 | trimSuffix "-" }}
+{{- default (printf "%s-backend-serving-cert" (include "apiservice-audit-proxy.fullname" .)) .Values.backend.testApiserver.backendServingCert.certSecretName | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{- define "apiservice-audit-proxy.testApiserver.servingDNSNames" -}}
 {{- $serviceName := include "apiservice-audit-proxy.testApiserver.fullname" . -}}
-{{- if .Values.testApiserver.backendServingCert.dnsNames -}}
-{{- toYaml .Values.testApiserver.backendServingCert.dnsNames -}}
+{{- if .Values.backend.testApiserver.backendServingCert.dnsNames -}}
+{{- toYaml .Values.backend.testApiserver.backendServingCert.dnsNames -}}
 {{- else -}}
 - {{ $serviceName }}
 - {{ printf "%s.%s" $serviceName .Release.Namespace }}

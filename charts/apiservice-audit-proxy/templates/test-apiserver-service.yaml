@@ -1,4 +1,4 @@
-{{- if .Values.testApiserver.enabled }}
+{{- if .Values.backend.testApiserver.enabled }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -7,12 +7,12 @@ metadata:
   labels:
     {{- include "apiservice-audit-proxy.testApiserver.labels" . | nindent 4 }}
 spec:
-  type: {{ .Values.testApiserver.service.type }}
+  type: {{ .Values.backend.testApiserver.service.type }}
   selector:
     {{- include "apiservice-audit-proxy.testApiserver.selectorLabels" . | nindent 4 }}
   ports:
     - name: https
-      port: {{ .Values.testApiserver.service.port | int }}
+      port: {{ .Values.backend.testApiserver.service.port | int }}
       protocol: TCP
       targetPort: https
 {{- end }}

@@ -105,7 +105,7 @@ Stop it with `task e2e:portforward-stop`.
 The chart keeps production defaults in `values.yaml`; demo components are
 explicit opt-ins:
 
-- `testApiserver.enabled`: deploys the Wardle sample aggregated API backend.
+- `backend.testApiserver.enabled`: deploys the Wardle sample aggregated API backend.
 - `webhookTester.enabled`: deploys webhook-tester and generates a proxy webhook
   kubeconfig Secret for demo audit events.
 
