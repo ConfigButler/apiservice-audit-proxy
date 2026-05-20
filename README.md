@@ -118,13 +118,14 @@ helm template apiservice-audit-proxy charts/apiservice-audit-proxy \
 ```
 
 Local e2e uses `test/e2e/values/` for the same Helm-managed demo backend and
-receiver, plus k3d-specific image and requestheader CA wiring.
+receiver, plus k3d-specific image settings. Inbound requestheader trust is read
+directly from the cluster's `extension-apiserver-authentication` ConfigMap, so
+there is no requestheader CA Secret to copy into the proxy namespace.
 
-The default backend identity mode is `backend.identity.mode=requestheader`.
-Use `backend.identity.mode=impersonation` when the backend can authorize
-Kubernetes impersonation and you want to avoid provisioning a backend client
-certificate private key to this chart, for example on platforms where the
-frontend proxy key is owned elsewhere. See the
+The default backend identity mode is `backend.identity.mode=impersonation`.
+Use `backend.identity.mode=requestheader` when the backend is designed to trust
+forwarded front-proxy `X-Remote-*` identity and should receive those headers
+unchanged. See the
 [Helm values guide](docs/HELM_VALUES.md#backend-identity-modes) for when to use
 each mode.
 

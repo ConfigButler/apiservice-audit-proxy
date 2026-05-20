@@ -16,7 +16,7 @@ server for each hop:
 | Hop | Client | Server | Current demo transport | Main controls |
 |---|---|---|---|---|
 | Kubernetes API aggregation | kube-apiserver | apiservice-audit-proxy | HTTPS | `server.tls.*`, `server.apiService.*` |
-| Delegated user identity | kube-apiserver/front-proxy | apiservice-audit-proxy | same HTTPS request | `requestHeader.*` |
+| Delegated user identity | kube-apiserver/front-proxy | apiservice-audit-proxy | same HTTPS request | cluster `extension-apiserver-authentication` ConfigMap |
 | Backend API call | apiservice-audit-proxy | sample-apiserver | HTTPS | `backend.*`, `backend.testApiserver.backendServingCert.*`, `backend.testApiserver.backendClientCert.*` |
 | Proxy audit webhook, Lane B | apiservice-audit-proxy | webhook-tester | HTTP Service | `audit.webhook.*`, `audit.testWebhookReceiver.*` |
 | Native kube-apiserver audit webhook, Lane A | kube-apiserver | Traefik, then webhook-tester | HTTPS to Traefik, HTTP to webhook-tester | `test/e2e/cluster/audit/webhook-config.yaml`, Traefik Flux values |
@@ -296,7 +296,7 @@ material. In that mode, leave `audit.testWebhookReceiver.enabled=false` or overr
 
 Template:
 
-- `templates/webhook-tester-kubeconfig-secret.yaml`
+- `templates/test-webhookreceiver/kubeconfig-secret.yaml`
 
 ## 5. kube-apiserver to Audit Webhook, Lane A
 
@@ -519,7 +519,7 @@ unauthenticated requests are rejected.
 |---|---|
 | `server.tls.*` | How the proxy gets its own HTTPS serving certificate |
 | `server.apiService.*` | How kube-apiserver reaches and trusts the proxy as an aggregated API server |
-| `requestHeader.*` | How the proxy verifies the kube-apiserver/front-proxy client before trusting delegated identity headers |
+| Cluster requestheader ConfigMap | How the proxy verifies the kube-apiserver/front-proxy client before trusting delegated identity headers |
 | `backend.*` | How the proxy connects to and authenticates with the real backend |
 | `backend.identity.*` | How the proxy presents the delegated user to the backend: requestheader headers or Kubernetes impersonation |
 | `backend.testApiserver.backendServingCert.*` | Demo-only resources that give the sample backend a server certificate |

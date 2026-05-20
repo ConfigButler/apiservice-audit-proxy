@@ -301,6 +301,7 @@ jobs:
               task e2e:test-smoke-full
               task e2e:test-smoke-backend-ca
               task e2e:test-audit-gap
+              task e2e:test-requestheader-trust
               task e2e:test-impersonation
               task e2e:test-impersonation-no-rbac
             "

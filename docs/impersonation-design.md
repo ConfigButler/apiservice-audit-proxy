@@ -25,7 +25,7 @@ In the new mode:
    surface: `X-Remote-User`, `X-Remote-Group`, `X-Remote-Uid`, and
    `X-Remote-Extra-*`.
 2. The proxy verifies that delegated identity on the inbound hop, as it already
-   can do today with `--client-ca-file`.
+   does from the cluster's `extension-apiserver-authentication` ConfigMap.
 3. The proxy calls the real backend as its own Kubernetes ServiceAccount.
 4. The proxy translates the verified user into Kubernetes impersonation
    headers: `Impersonate-User`, repeated `Impersonate-Group`,
@@ -50,9 +50,11 @@ Relevant code:
   parses backend TLS flags and builds an `http.Transport`. There is no backend
   authentication mode beyond TLS client certificates.
 - [`pkg/identity/requestheader.go`](../pkg/identity/requestheader.go)
-  already extracts Kubernetes requestheader identity from inbound requests. If
-  `--client-ca-file` is configured, the extractor verifies the inbound client
-  certificate before trusting those headers.
+  extracts Kubernetes requestheader identity from inbound requests. The server
+  path uses the cluster-backed extractor from
+  [`pkg/identity/cluster.go`](../pkg/identity/cluster.go), which verifies the
+  inbound client certificate against the cluster's published requestheader CA
+  and accepted client names before trusting those headers.
 - [`pkg/proxy/handler.go`](../pkg/proxy/handler.go)
   extracts `authnv1.UserInfo` at the start of `ServeHTTP`.
 - `serveAudited` calls `buildUpstreamRequest`, which clones the inbound request
@@ -71,12 +73,14 @@ the backend.
 Add a backend identity mode:
 
 ```text
---backend-identity-mode=requestheader     # default, current behavior
---backend-identity-mode=impersonation     # new behavior
+--backend-identity-mode=requestheader     # binary default; forwards X-Remote-*
+--backend-identity-mode=impersonation     # chart default; emits Impersonate-*
 ```
 
-`requestheader` mode remains the default to preserve compatibility with the
-existing chart, tests, and demo sample-apiserver setup.
+The binary keeps `requestheader` as its flag default for compatibility. The
+Helm chart defaults to `impersonation`, because the chart can make the
+ServiceAccount-token path explicit and avoids requiring a backend client
+certificate for the common install.
 
 In `impersonation` mode, the proxy must apply the same backend identity logic
 to audited and non-audited requests:
@@ -89,12 +93,10 @@ to audited and non-audited requests:
 - keep existing reverse-proxy mechanics such as URL rewriting, hop-by-hop
   header stripping, and `X-Forwarded-For`.
 
-This mode should require `--client-ca-file`. Without inbound requestheader
-client certificate verification, the proxy would be converting untrusted
-client-supplied headers into authorized backend impersonation.
-
-`--client-ca-file` alone is not sufficient — see
-[Inbound identity trust](#inbound-identity-trust).
+This mode requires verified inbound requestheader trust. That trust is no
+longer configured with proxy-local flags; the proxy reads the cluster's
+requestheader CA, accepted client names, and header names from
+`kube-system/extension-apiserver-authentication`.
 
 ## Inbound identity trust
 
@@ -102,33 +104,13 @@ Impersonation mode turns verified `X-Remote-*` headers into authorized backend
 impersonation, so trust in the inbound client certificate is now a direct grant
 of impersonation power. A CA check alone does not narrow that trust.
 
-The current extractor passes no allowed client names to
-`headerrequest.NewDynamicVerifyOptionsSecure`
-([`pkg/identity/requestheader.go`](../pkg/identity/requestheader.go)): the
-`allowedClientNames` argument is `headerrequest.StaticStringSlice(nil)`. With an
-empty list, *any* certificate that chains to `--client-ca-file` is trusted to
-assert `X-Remote-*`. In `requestheader` mode that only re-forwards headers; in
-`impersonation` mode it means any holder of such a certificate can drive backend
-impersonation of arbitrary users, including cluster-admin identities.
-
 Standard Kubernetes aggregator trust pins both a dedicated
-`requestheader-client-ca-file` *and* a `requestheader-allowed-names` list
-(commonly the kube-apiserver front-proxy client name). Impersonation mode must
-do the same:
-
-- Add `--client-allowed-names`, a comma-separated list of acceptable client
-  certificate common names, wired into the `allowedClientNames` argument of
-  `NewDynamicVerifyOptionsSecure`. `NewExtractor` gains an `allowedNames`
-  parameter; an empty list preserves today's "any name under the CA" behavior
-  for `requestheader` mode.
-- In `impersonation` mode, reject startup when `--client-allowed-names` is
-  empty. A broad cluster CA with no name pinning is the dangerous combination
-  and must not be silently accepted.
-
-A future refinement is to read the `extension-apiserver-authentication`
-ConfigMap in `kube-system` the way a recommended-options aggregated API server
-does, which supplies the requestheader CA, allowed names, and header prefixes
-automatically. The explicit flag is the smaller first step.
+`requestheader-client-ca-file` and a `requestheader-allowed-names` list
+(commonly the kube-apiserver front-proxy client name). The proxy now consumes
+that same trust directly from `kube-system/extension-apiserver-authentication`
+via `identity.NewClusterExtractor`. Startup fails if the ConfigMap is
+unreadable or does not yield a usable trust snapshot, so impersonation mode
+cannot start by silently trusting unverified headers.
 
 ## Backend identity interface
 
@@ -331,7 +313,6 @@ Extend `config` in `cmd/server/main.go`:
 ```go
 type config struct {
     // existing fields...
-    clientAllowedNames                   string
     backendIdentityMode                  string
     backendImpersonationTokenFile        string
     backendImpersonationExtraKeys        string
@@ -343,7 +324,6 @@ type config struct {
 New flags:
 
 ```text
---client-allowed-names=front-proxy-client
 --backend-identity-mode=requestheader|impersonation
 --backend-impersonation-token-file=/var/run/secrets/kubernetes.io/serviceaccount/token
 --backend-impersonation-extra-keys=scopes,example.com/tenant
@@ -354,11 +334,9 @@ New flags:
 Validation:
 
 - `--backend-identity-mode` must be either `requestheader` or `impersonation`.
-- `impersonation` mode requires `--client-ca-file`.
-- `impersonation` mode requires a non-empty `--client-allowed-names`; see
-  [Inbound identity trust](#inbound-identity-trust). `--client-allowed-names` is
-  accepted in `requestheader` mode too, where an empty value keeps current
-  behavior.
+- Inbound trust is always cluster-sourced and always verified on the server
+  path; there are no proxy-local requestheader CA or allowed-name flags to
+  validate.
 - `--backend-impersonation-token-file`, `--backend-impersonation-extra-keys`,
   `--backend-impersonation-forward-all-extras`, and
   `--backend-impersonation-forward-uid` are only meaningful in `impersonation`
@@ -381,13 +359,9 @@ Extend
 [`charts/apiservice-audit-proxy/values.yaml`](../charts/apiservice-audit-proxy/values.yaml):
 
 ```yaml
-requestHeader:
-  # existing clientCASecretName / clientCAFileName...
-  allowedNames: []
-
 backend:
   identity:
-    mode: requestheader
+    mode: impersonation
     impersonation:
       tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
       forwardUid: true
@@ -410,18 +384,15 @@ extras: it controls both which `Impersonate-Extra-*` headers the proxy emits and
 which `userextras/<key>` RBAC rules the chart renders. `extras.mode=none` drops
 all extras. `extras.mode=all` forwards every extra and renders broad extra RBAC.
 
-`requestHeader.allowedNames` lists the client certificate common names accepted
-on the inbound hop. It is empty by default (current behavior) but must be set
-when `backend.identity.mode=impersonation`; the chart should fail rendering
-otherwise.
+There is no `requestHeader:` chart section. Inbound trust comes from the
+cluster ConfigMap, and the chart always renders the kube-system
+`extension-apiserver-authentication-reader` RoleBinding the proxy needs to read
+it.
 
 Render args in
 [`templates/deployment.yaml`](../charts/apiservice-audit-proxy/templates/deployment.yaml):
 
 ```yaml
-{{- if .Values.requestHeader.allowedNames }}
-- --client-allowed-names={{ join "," .Values.requestHeader.allowedNames }}
-{{- end }}
 - --backend-identity-mode={{ .Values.backend.identity.mode }}
 {{- if eq .Values.backend.identity.mode "impersonation" }}
 - --backend-impersonation-token-file={{ .Values.backend.identity.impersonation.tokenFile }}
@@ -530,10 +501,10 @@ request.
 
 Impersonation mode must enforce these rules:
 
-- Require verified inbound delegated identity via `--client-ca-file`, and pin
-  the accepted client certificate identity with a non-empty
-  `--client-allowed-names`. A CA check without name pinning trusts every
-  certificate under that CA to drive impersonation.
+- Require verified inbound delegated identity through cluster-sourced
+  requestheader trust. The CA bundle, accepted client names, and header names
+  all come from `kube-system/extension-apiserver-authentication`; startup fails
+  closed if that trust cannot be loaded.
 - Strip inbound `Impersonate-*` headers before setting proxy-controlled
   impersonation headers.
 - Strip inbound `Authorization` before applying the backend ServiceAccount
@@ -575,15 +546,12 @@ forwarding.
 - Both `POST` and `GET` backend requests carry `X-Forwarded-For` (the `Rewrite`
   path does not append it automatically).
 - Extra-key escaping matches Kubernetes for `/`, `%`, spaces, and mixed case.
-- Only client certificates whose common name is in `--client-allowed-names` have
-  their `X-Remote-*` headers trusted; a CA-valid cert with an unlisted name is
-  rejected.
+- Cluster-sourced requestheader trust verifies the inbound client certificate
+  and honors the cluster's accepted front-proxy client names.
 
 ### Unit tests in `cmd/server`
 
 - invalid `--backend-identity-mode` is rejected,
-- `impersonation` mode without `--client-ca-file` is rejected,
-- `impersonation` mode with an empty `--client-allowed-names` is rejected,
 - backend client certificate flags are rejected in `impersonation` mode,
 - token file, extra-keys, forward-all-extras, and forward-uid flags are accepted
   in `impersonation` mode,
@@ -597,11 +565,9 @@ forwarding.
 
 ### Helm tests or rendered-manifest tests
 
-- default values render `--backend-identity-mode=requestheader` and no
-  impersonation flags,
+- default values render `--backend-identity-mode=impersonation` and the
+  configured impersonation token/UID flags,
 - impersonation values render the new flags,
-- impersonation values with an empty `requestHeader.allowedNames` fail rendering,
-- impersonation values render `--client-allowed-names`,
 - optional RBAC is not rendered by default (`rbac.create=false`),
 - RBAC only renders when `backend.identity.mode=impersonation`,
 - `rbac.create=true` fails in `requestheader` mode,
@@ -638,14 +604,11 @@ Two new values files:
 - `proxy-impersonation-no-rbac.yaml`: same, but `rbac.create=false` and no
   operator-supplied impersonation RBAC.
 
-Both still require the requestheader client CA secret that the harness already
-copies into the proxy namespace (`e2e:_requestheader-ca-copied`), because
-impersonation mode requires `--client-ca-file`. Both must also set
-`requestHeader.allowedNames` to the kube-apiserver front-proxy client common
-name, since impersonation mode rejects an empty allowed-names list. The harness
-already has the cluster requestheader client CA; it must additionally surface
-the expected client CN (read from the `extension-apiserver-authentication`
-ConfigMap, key `requestheader-allowed-names`) so the values files can pin it.
+Both rely on cluster-sourced inbound requestheader trust. The e2e harness no
+longer copies a requestheader CA Secret into the proxy namespace; instead, the
+chart-created kube-system RoleBinding lets the proxy read
+`extension-apiserver-authentication` directly. The requestheader-trust e2e lane
+also verifies that deleting that RoleBinding makes startup fail closed.
 
 **Scenario 1 — audited write (`TestImpersonationWrite`).**
 
