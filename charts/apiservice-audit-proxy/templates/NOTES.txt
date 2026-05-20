@@ -1,11 +1,11 @@
-1. Create or provide the webhook kubeconfig Secret referenced by `webhook.kubeconfigSecretName`.
+1. Create or provide the webhook kubeconfig Secret referenced by `audit.webhook.kubeconfigSecretName`.
 2. Set `backend.url` to the real aggregated backend this proxy should forward to.
-3. Choose one serving certificate path with `certificates.mode`:
+3. Choose one serving certificate path with `server.tls.mode`:
    - `existing-secret`: mount an existing TLS Secret with `tls.crt` and `tls.key`
-   - `dev-self-signed`: generate a Helm-managed self-signed cert and use `APIService.insecureSkipTLSVerify`
-   - `cert-manager`: let cert-manager issue the serving cert and inject CA into the `APIService`
-4. If the backend requires custom trust or mTLS, set `backend.caSecretName` and/or `backend.clientCertSecretName`.
-5. If you enable `apiService.enabled` with `certificates.mode=existing-secret`, set either `apiService.caBundle` or `apiService.insecureSkipTLSVerify=true`.
+   - `self-signed`: chart generates a self-signed CA + cert, embeds the CA into the `APIService.spec.caBundle`, and preserves the Secret across upgrades via lookup
+   - `cert-manager`: let cert-manager issue the serving cert and inject the CA into the `APIService`
+4. If the backend requires custom trust or mTLS, set `backend.tls.caSecretName` and/or, in requestheader mode, `backend.identity.requestheader.clientCert.secretName`.
+5. If you enable `server.apiService.enabled` with `server.tls.mode=existing-secret`, set either `server.apiService.caBundle` or `server.apiService.insecureSkipTLSVerify=true`.
 
 Example:
 
@@ -13,8 +13,8 @@ Example:
     --namespace {{ .Release.Namespace }} \
     --create-namespace \
     --set backend.url=https://sample-apiserver.wardle.svc:443 \
-    --set webhook.kubeconfigSecretName=audit-pass-through-webhook-kubeconfig \
-    --set certificates.mode=dev-self-signed
+    --set audit.webhook.kubeconfigSecretName=audit-pass-through-webhook-kubeconfig \
+    --set server.tls.mode=self-signed
 {{- if .Values.backend.testApiserver.enabled }}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -26,29 +26,29 @@ The chart rendered the Wardle sample-apiserver Service:
   https://{{ include "apiservice-audit-proxy.testApiserver.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.backend.testApiserver.service.port | int }}
 
 For a complete demo install, use values-demo.yaml so backend.url,
-backend.clientCertSecretName, apiService.enabled, and webhookTester.enabled are
-set explicitly together.
+backend.identity.requestheader.clientCert.secretName, server.apiService.enabled,
+and audit.testWebhookReceiver.enabled are set explicitly together.
 {{- end }}
-{{- if .Values.webhookTester.enabled }}
+{{- if .Values.audit.testWebhookReceiver.enabled }}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Webhook Tester — side-by-side audit demo:
+Test Webhook Receiver — side-by-side audit demo:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Port-forward the webhook-tester UI:
 
   kubectl port-forward \
     -n {{ .Release.Namespace }} \
-    svc/{{ include "apiservice-audit-proxy.webhookTester.fullname" . }} \
-    8080:{{ .Values.webhookTester.service.port }}
+    svc/{{ include "apiservice-audit-proxy.testWebhookReceiver.fullname" . }} \
+    8080:{{ .Values.audit.testWebhookReceiver.service.port }}
 
 Then open two browser tabs:
 
   Lane A — kube-apiserver native audit (silent for aggregated API calls):
-    http://localhost:8080/{{ .Values.webhookTester.kubeApiserverSessionUUID }}
+    http://localhost:8080/{{ .Values.audit.testWebhookReceiver.kubeApiserverSessionUUID }}
 
   Lane B — proxy audit (shows events for aggregated API calls):
-    http://localhost:8080/{{ .Values.webhookTester.proxySessionUUID }}
+    http://localhost:8080/{{ .Values.audit.testWebhookReceiver.proxySessionUUID }}
 
 Make a request to the aggregated API and watch Lane B light up while Lane A
 stays silent. That contrast is what this tool provides.

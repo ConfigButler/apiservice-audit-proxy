@@ -163,7 +163,7 @@ spec:
   caBundle: ...
 ```
 
-When `certificates.mode=cert-manager`, this chart annotates the `APIService` so
+When `server.tls.mode=cert-manager`, this chart annotates the `APIService` so
 cert-manager can inject the CA bundle. That solves kube-apiserver-to-proxy
 serving TLS. It does not solve kube-apiserver-to-GitOps-Reverser audit webhook
 TLS, because audit webhooks are not configured by an in-cluster API object.

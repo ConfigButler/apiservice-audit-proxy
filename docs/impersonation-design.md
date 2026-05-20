@@ -634,7 +634,7 @@ Two new values files:
 
 - `proxy-impersonation.yaml`: `backend.identity.mode=impersonation`,
   `backend.identity.impersonation.rbac.create=true`, no
-  `backend.clientCertSecretName`.
+  `backend.identity.requestheader.clientCert.secretName`.
 - `proxy-impersonation-no-rbac.yaml`: same, but `rbac.create=false` and no
   operator-supplied impersonation RBAC.
 

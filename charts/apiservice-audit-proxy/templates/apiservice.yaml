@@ -1,36 +1,42 @@
-{{- if .Values.apiService.enabled }}
-{{- $skipVerify := eq (include "apiservice-audit-proxy.apiServiceSkipVerify" .) "true" -}}
+{{- /*
+APIService rendering for cert-manager and existing-secret modes.
+Self-signed mode is handled in tls-self-signed.yaml so the generated CA can be
+shared with the serving-cert Secret in one template iteration.
+*/ -}}
+{{- if .Values.server.apiService.enabled }}
 {{- $mode := include "apiservice-audit-proxy.certificateMode" . -}}
-{{- if and (eq $mode "existing-secret") (not $skipVerify) (not .Values.apiService.caBundle) -}}
-{{- fail "apiService.caBundle or apiService.insecureSkipTLSVerify=true is required when apiService.enabled=true and certificates.mode=existing-secret" -}}
+{{- if ne $mode "self-signed" }}
+{{- if and (eq $mode "existing-secret") (not .Values.server.apiService.insecureSkipTLSVerify) (not .Values.server.apiService.caBundle) -}}
+{{- fail "server.apiService.caBundle or server.apiService.insecureSkipTLSVerify=true is required when server.apiService.enabled=true and server.tls.mode=existing-secret" -}}
 {{- end }}
 apiVersion: apiregistration.k8s.io/v1
 kind: APIService
 metadata:
-  name: {{ required "apiService.name is required when apiService.enabled=true" .Values.apiService.name }}
-  {{- if or (eq $mode "cert-manager") .Values.apiService.annotations }}
+  name: {{ required "server.apiService.name is required when server.apiService.enabled=true" .Values.server.apiService.name }}
+  {{- if or (eq $mode "cert-manager") .Values.server.apiService.annotations }}
   annotations:
     {{- if eq $mode "cert-manager" }}
     cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "apiservice-audit-proxy.servingCertificateName" . }}
     {{- end }}
-    {{- with .Values.apiService.annotations }}
+    {{- with .Values.server.apiService.annotations }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
   {{- end }}
   labels:
     {{- include "apiservice-audit-proxy.labels" . | nindent 4 }}
 spec:
-  group: {{ required "apiService.group is required when apiService.enabled=true" .Values.apiService.group }}
-  groupPriorityMinimum: {{ .Values.apiService.groupPriorityMinimum }}
-  versionPriority: {{ .Values.apiService.versionPriority }}
-  version: {{ required "apiService.version is required when apiService.enabled=true" .Values.apiService.version }}
+  group: {{ required "server.apiService.group is required when server.apiService.enabled=true" .Values.server.apiService.group }}
+  groupPriorityMinimum: {{ .Values.server.apiService.groupPriorityMinimum }}
+  versionPriority: {{ .Values.server.apiService.versionPriority }}
+  version: {{ required "server.apiService.version is required when server.apiService.enabled=true" .Values.server.apiService.version }}
   service:
     name: {{ include "apiservice-audit-proxy.fullname" . }}
     namespace: {{ .Release.Namespace }}
-    port: {{ .Values.service.port }}
-  {{- if $skipVerify }}
+    port: {{ .Values.server.service.port }}
+  {{- if .Values.server.apiService.insecureSkipTLSVerify }}
   insecureSkipTLSVerify: true
-  {{- else if .Values.apiService.caBundle }}
-  caBundle: {{ .Values.apiService.caBundle | quote }}
+  {{- else if .Values.server.apiService.caBundle }}
+  caBundle: {{ .Values.server.apiService.caBundle | quote }}
   {{- end }}
+{{- end }}
 {{- end }}

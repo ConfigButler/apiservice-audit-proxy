@@ -111,7 +111,7 @@ e2e:test-smoke
          ├─ e2e:_services-ready
          │   └─ e2e:flux-bootstrap
          │       └─ e2e:cluster-up
-         └─ Helm backend.testApiserver.enabled=true + webhookTester.enabled=true
+         └─ Helm backend.testApiserver.enabled=true + audit.testWebhookReceiver.enabled=true
              └─ chart-generated webhook kubeconfig Secret
 ```
 
@@ -182,8 +182,8 @@ The chart lives in `charts/apiservice-audit-proxy/`. Key notes:
 - Integer values passed as CLI arguments must use `| int` in templates to
   prevent Helm rendering them as scientific notation (e.g. `1.048576e+06`).
 - TLS is mandatory; the chart supports three modes: `cert-manager`,
-  `dev-self-signed`, and `existing-secret`.
-- The `APIService` resource is only created when `apiService.enabled: true`.
+  `self-signed`, and `existing-secret`.
+- The `APIService` resource is only created when `server.apiService.enabled: true`.
 
 ## Commit and PR Hygiene
 

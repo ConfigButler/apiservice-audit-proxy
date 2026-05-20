@@ -58,7 +58,7 @@ Done when:
 
 ### Fast Dev Lane
 
-- add `task e2e:test-smoke-dev-cert` for the fast `dev-self-signed` path
+- add `task e2e:test-smoke-dev-cert` for the fast `self-signed` path
 
 ### Cluster Reset
 

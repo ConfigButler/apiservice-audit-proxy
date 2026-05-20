@@ -6,10 +6,10 @@ metadata:
   labels:
     {{- include "apiservice-audit-proxy.labels" . | nindent 4 }}
 spec:
-  type: {{ .Values.service.type }}
+  type: {{ .Values.server.service.type }}
   ports:
     - name: api
-      port: {{ .Values.service.port }}
+      port: {{ .Values.server.service.port }}
       targetPort: api
       protocol: TCP
   selector:

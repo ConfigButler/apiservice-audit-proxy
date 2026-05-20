@@ -65,11 +65,11 @@ ServiceAccount name.
 Serving certificate mode.
 */}}
 {{- define "apiservice-audit-proxy.certificateMode" -}}
-{{- $mode := default "existing-secret" .Values.certificates.mode -}}
-{{- if or (eq $mode "existing-secret") (eq $mode "dev-self-signed") (eq $mode "cert-manager") -}}
+{{- $mode := default "self-signed" .Values.server.tls.mode -}}
+{{- if or (eq $mode "existing-secret") (eq $mode "self-signed") (eq $mode "cert-manager") -}}
 {{- $mode -}}
 {{- else -}}
-{{- fail (printf "unsupported certificates.mode %q" $mode) -}}
+{{- fail (printf "unsupported server.tls.mode %q (expected: self-signed | cert-manager | existing-secret)" $mode) -}}
 {{- end -}}
 {{- end }}
 
@@ -79,11 +79,11 @@ Serving TLS Secret name.
 {{- define "apiservice-audit-proxy.servingSecretName" -}}
 {{- $mode := include "apiservice-audit-proxy.certificateMode" . -}}
 {{- if eq $mode "existing-secret" -}}
-{{- required "certificates.existingSecretName is required when certificates.mode=existing-secret" .Values.certificates.existingSecretName -}}
-{{- else if eq $mode "dev-self-signed" -}}
-{{- default (printf "%s-dev-tls" (include "apiservice-audit-proxy.fullname" .)) .Values.certificates.devSelfSigned.secretName -}}
+{{- required "server.tls.existingSecretName is required when server.tls.mode=existing-secret" .Values.server.tls.existingSecretName -}}
+{{- else if eq $mode "self-signed" -}}
+{{- default (printf "%s-tls" (include "apiservice-audit-proxy.fullname" .)) .Values.server.tls.selfSigned.secretName -}}
 {{- else -}}
-{{- default (printf "%s-tls" (include "apiservice-audit-proxy.fullname" .)) .Values.certificates.certManager.secretName -}}
+{{- default (printf "%s-tls" (include "apiservice-audit-proxy.fullname" .)) .Values.server.tls.certManager.secretName -}}
 {{- end -}}
 {{- end }}
 
@@ -91,19 +91,19 @@ Serving TLS Secret name.
 Serving certificate name for cert-manager mode.
 */}}
 {{- define "apiservice-audit-proxy.servingCertificateName" -}}
-{{- default (printf "%s-serving" (include "apiservice-audit-proxy.fullname" .)) .Values.certificates.certManager.certificateName -}}
+{{- default (printf "%s-serving" (include "apiservice-audit-proxy.fullname" .)) .Values.server.tls.certManager.certificateName -}}
 {{- end }}
 
 {{/*
 Serving issuer name for cert-manager mode.
 */}}
 {{- define "apiservice-audit-proxy.servingIssuerName" -}}
-{{- if .Values.certificates.certManager.issuerRef.name -}}
-{{- .Values.certificates.certManager.issuerRef.name -}}
-{{- else if .Values.certificates.certManager.createSelfSignedIssuer -}}
-{{- default (printf "%s-selfsigned" (include "apiservice-audit-proxy.fullname" .)) .Values.certificates.certManager.selfSignedIssuerName -}}
+{{- if .Values.server.tls.certManager.issuerRef.name -}}
+{{- .Values.server.tls.certManager.issuerRef.name -}}
+{{- else if .Values.server.tls.certManager.createSelfSignedIssuer -}}
+{{- default (printf "%s-selfsigned" (include "apiservice-audit-proxy.fullname" .)) .Values.server.tls.certManager.selfSignedIssuerName -}}
 {{- else -}}
-{{- fail "certificates.certManager.issuerRef.name is required when certificates.mode=cert-manager and createSelfSignedIssuer=false" -}}
+{{- fail "server.tls.certManager.issuerRef.name is required when server.tls.mode=cert-manager and createSelfSignedIssuer=false" -}}
 {{- end -}}
 {{- end }}
 
@@ -119,38 +119,29 @@ Default DNS names for proxy serving TLS.
 {{- end }}
 
 {{/*
-Should the APIService skip TLS verification.
+testWebhookReceiver resource name (deployment, service, ingress, secret).
+Demo audit receiver implemented by the webhook-tester image.
 */}}
-{{- define "apiservice-audit-proxy.apiServiceSkipVerify" -}}
-{{- if or .Values.apiService.insecureSkipTLSVerify (eq (include "apiservice-audit-proxy.certificateMode" .) "dev-self-signed") -}}
-true
-{{- else -}}
-false
-{{- end -}}
+{{- define "apiservice-audit-proxy.testWebhookReceiver.fullname" -}}
+{{- printf "%s-test-webhook-receiver" (include "apiservice-audit-proxy.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{/*
-webhook-tester resource name (deployment, service, ingress, secret).
+testWebhookReceiver selector labels. app.kubernetes.io/name stays as the
+upstream image name; component identifies the chart role.
 */}}
-{{- define "apiservice-audit-proxy.webhookTester.fullname" -}}
-{{- printf "%s-webhook-tester" (include "apiservice-audit-proxy.fullname" .) | trunc 63 | trimSuffix "-" }}
-{{- end }}
-
-{{/*
-webhook-tester selector labels.
-*/}}
-{{- define "apiservice-audit-proxy.webhookTester.selectorLabels" -}}
+{{- define "apiservice-audit-proxy.testWebhookReceiver.selectorLabels" -}}
 app.kubernetes.io/name: webhook-tester
 app.kubernetes.io/instance: {{ .Release.Name }}
-app.kubernetes.io/component: webhook-tester
+app.kubernetes.io/component: test-webhook-receiver
 {{- end }}
 
 {{/*
-webhook-tester common labels.
+testWebhookReceiver common labels.
 */}}
-{{- define "apiservice-audit-proxy.webhookTester.labels" -}}
+{{- define "apiservice-audit-proxy.testWebhookReceiver.labels" -}}
 helm.sh/chart: {{ include "apiservice-audit-proxy.chart" . }}
-{{ include "apiservice-audit-proxy.webhookTester.selectorLabels" . }}
+{{ include "apiservice-audit-proxy.testWebhookReceiver.selectorLabels" . }}
 {{- if .Chart.AppVersion }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}

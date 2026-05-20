@@ -15,16 +15,16 @@ server for each hop:
 
 | Hop | Client | Server | Current demo transport | Main controls |
 |---|---|---|---|---|
-| Kubernetes API aggregation | kube-apiserver | apiservice-audit-proxy | HTTPS | `certificates.*`, `apiService.*` |
+| Kubernetes API aggregation | kube-apiserver | apiservice-audit-proxy | HTTPS | `server.tls.*`, `server.apiService.*` |
 | Delegated user identity | kube-apiserver/front-proxy | apiservice-audit-proxy | same HTTPS request | `requestHeader.*` |
 | Backend API call | apiservice-audit-proxy | sample-apiserver | HTTPS | `backend.*`, `backend.testApiserver.backendServingCert.*`, `backend.testApiserver.backendClientCert.*` |
-| Proxy audit webhook, Lane B | apiservice-audit-proxy | webhook-tester | HTTP Service | `audit.webhook.*`, `webhookTester.*` |
+| Proxy audit webhook, Lane B | apiservice-audit-proxy | webhook-tester | HTTP Service | `audit.webhook.*`, `audit.testWebhookReceiver.*` |
 | Native kube-apiserver audit webhook, Lane A | kube-apiserver | Traefik, then webhook-tester | HTTPS to Traefik, HTTP to webhook-tester | `test/e2e/cluster/audit/webhook-config.yaml`, Traefik Flux values |
 | Human browser UI | developer browser | webhook-tester | HTTP port-forward | `e2e:portforward-webhook-tester` |
 
 ## 1. kube-apiserver to Proxy
 
-The proxy is an aggregated API server. When `apiService.enabled=true`, the chart
+The proxy is an aggregated API server. When `server.apiService.enabled=true`, the chart
 registers an `APIService` that points kube-apiserver at the proxy Service.
 
 ```text
@@ -35,8 +35,9 @@ kube-apiserver  --->  apiservice-audit-proxy
 The proxy's serving certificate is controlled by:
 
 ```yaml
-certificates:
-  mode: cert-manager | dev-self-signed | existing-secret
+server:
+  tls:
+    mode: cert-manager | self-signed | existing-secret
 ```
 
 Choose the mode by certificate ownership:
@@ -45,7 +46,7 @@ Choose the mode by certificate ownership:
 |---|---|---|
 | `cert-manager` | cert-manager should issue and rotate the proxy serving certificate | Production-friendly when cert-manager is installed. |
 | `existing-secret` | another platform component owns the serving certificate Secret | Good for managed platforms and central certificate lifecycles. |
-| `dev-self-signed` | local throwaway demo or development | Forces `APIService` skip-verify; do not use for production. |
+| `self-signed` | no external cert authority involved | Chart generates a CA on first install, embeds it into `APIService.spec.caBundle`, and preserves the Secret across upgrades via `lookup`. |
 
 The serving certificate is mounted into the proxy pod and used by:
 
@@ -54,19 +55,19 @@ The serving certificate is mounted into the proxy pod and used by:
 --tls-private-key-file
 ```
 
-The kube-apiserver trust side is controlled by `apiService.*`:
+The kube-apiserver trust side is controlled by `server.apiService.*`:
 
-- `apiService.caBundle`: explicit CA bundle in the `APIService`
-- `apiService.insecureSkipTLSVerify`: disables backend verification for this APIService
-- `certificates.mode=cert-manager`: chart annotates the `APIService` for cert-manager CA injection
-- `certificates.mode=dev-self-signed`: chart forces `insecureSkipTLSVerify=true` for local development
+- `server.apiService.caBundle`: explicit CA bundle in the `APIService` (used in `existing-secret` mode)
+- `server.apiService.insecureSkipTLSVerify`: disables backend verification for this APIService
+- `server.tls.mode=cert-manager`: chart annotates the `APIService` for cert-manager CA injection
+- `server.tls.mode=self-signed`: chart embeds its generated CA into `APIService.spec.caBundle`
 
 Templates:
 
-- `templates/certificates.yaml`
-- `templates/dev-serving-cert-secret.yaml`
+- `templates/tls-cert-manager.yaml`
+- `templates/tls-self-signed.yaml`
+- `templates/apiservice.yaml` (cert-manager and existing-secret modes)
 - `templates/deployment.yaml`
-- `templates/apiservice.yaml`
 
 ## 2. Delegated User Identity into the Proxy
 
@@ -124,10 +125,11 @@ Proxy-side controls:
 
 ```yaml
 backend:
-  insecureSkipVerify: false
-  caSecretName: audit-pass-through-backend-serving-ca
-  caFileName: ca.crt
-  serverName: api-backend.wardle.svc.cluster.local
+  tls:
+    insecureSkipVerify: false
+    serverName: api-backend.wardle.svc.cluster.local
+    caSecretName: audit-pass-through-backend-serving-ca
+    caFileName: ca.crt
 ```
 
 Demo backend controls:
@@ -153,14 +155,15 @@ with:
 --tls-private-key-file=/etc/wardle/serving-cert/tls.key
 ```
 
-The proxy trusts that certificate through `backend.caSecretName` and validates
-the DNS name through `backend.serverName`.
+The proxy trusts that certificate through `backend.tls.caSecretName` and validates
+the DNS name through `backend.tls.serverName`.
 
 The default smoke values keep this simpler:
 
 ```yaml
 backend:
-  insecureSkipVerify: true
+  tls:
+    insecureSkipVerify: true
 ```
 
 The backend-CA smoke values exercise the stricter path.
@@ -178,9 +181,13 @@ Proxy-side controls:
 
 ```yaml
 backend:
-  clientCertSecretName: audit-pass-through-backend-client-cert
-  clientCertFileName: tls.crt
-  clientKeyFileName: tls.key
+  identity:
+    mode: requestheader
+    requestheader:
+      clientCert:
+        secretName: audit-pass-through-backend-client-cert
+        certFileName: tls.crt
+        keyFileName: tls.key
 ```
 
 Demo backend controls:
@@ -202,7 +209,7 @@ CA into the sample-apiserver pod and starts the backend with:
 --client-ca-file=/etc/wardle/proxy-client-ca/ca.crt
 ```
 
-The proxy mounts `backend.clientCertSecretName` and sends that certificate when
+The proxy mounts `backend.identity.requestheader.clientCert.secretName` and sends that certificate when
 connecting to the backend.
 
 Short version:
@@ -226,25 +233,27 @@ backend:
     mode: requestheader | impersonation
 ```
 
-`requestheader` is the default. The proxy forwards the verified `X-Remote-*`
-headers to the backend. Use it when the backend is itself configured as a
-requestheader/front-proxy-aware aggregated API server. If that backend also
-requires client certificate auth, set `backend.clientCertSecretName`.
-
-`impersonation` verifies the inbound requestheader identity, then calls the
-backend as the proxy ServiceAccount with Kubernetes `Impersonate-*` headers.
-Use it when the backend supports normal Kubernetes bearer-token auth and
+`impersonation` is the default. It verifies the inbound requestheader identity,
+then calls the backend as the proxy ServiceAccount with Kubernetes `Impersonate-*`
+headers. Use it when the backend supports normal Kubernetes bearer-token auth and
 impersonation authorization. This avoids provisioning a backend client
 certificate private key to the chart, which is useful on platforms such as
 CozyStack where the frontend proxy key should stay owned by the platform.
 
+`requestheader` mode forwards the verified `X-Remote-*` headers to the backend.
+Use it when the backend is itself configured as a requestheader/front-proxy-aware
+aggregated API server. If that backend also requires client certificate auth,
+set `backend.identity.requestheader.clientCert.secretName`.
+
 Important constraints for `impersonation`:
 
-- `requestHeader.clientCASecretName` and `requestHeader.allowedNames` are
-  required.
-- `backend.clientCertSecretName` is rejected in this mode today.
-- the proxy ServiceAccount needs impersonation RBAC for users, groups, UIDs,
+- Inbound requestheader trust is sourced from the cluster's
+  `kube-system/extension-apiserver-authentication` ConfigMap; no chart
+  configuration is needed.
+- The proxy ServiceAccount needs impersonation RBAC for users, groups, UIDs,
   and any forwarded user extras.
+- `backend.identity.requestheader.clientCert.*` is structurally only meaningful
+  in requestheader mode -- the chart does not consult it under impersonation.
 - `backend.identity.impersonation.extras.mode=none` is the safest default;
   prefer `allowlist` for required extras and reserve `all` for tightly
   controlled environments.
@@ -262,7 +271,7 @@ audit:
     timeout: 5s
 ```
 
-When `webhookTester.enabled=true`, the chart generates that Secret and points
+When `audit.testWebhookReceiver.enabled=true`, the chart generates that Secret and points
 the proxy directly at the in-cluster webhook-tester Service:
 
 ```yaml
@@ -282,7 +291,7 @@ on this demo path today.
 For a production HTTPS audit webhook, the TLS settings belong in the supplied
 kubeconfig Secret. A kubeconfig can carry or reference CA data, client
 certificates, client keys, bearer tokens, and other standard client auth
-material. In that mode, leave `webhookTester.enabled=false` or override
+material. In that mode, leave `audit.testWebhookReceiver.enabled=false` or override
 `audit.webhook.kubeconfigSecretName` with a Secret you manage.
 
 Template:
@@ -338,10 +347,11 @@ browser  --->  localhost:18090  --->  webhook-tester Service
 The Helm chart also renders an optional Ingress when:
 
 ```yaml
-webhookTester:
-  ingress:
-    enabled: true
-    className: traefik
+audit:
+  testWebhookReceiver:
+    ingress:
+      enabled: true
+      className: traefik
 ```
 
 In the local e2e stack, Traefik is installed by Flux and exposes its `websecure`
@@ -361,7 +371,7 @@ The standard smoke demo uses these choices:
 | Proxy verifies requestheader client | yes | yes | yes, with allowed names |
 | Backend identity mode | `requestheader` | `requestheader` | `impersonation` |
 | Backend verifies proxy client cert | yes | yes | no backend client cert; backend authorizes impersonation |
-| Proxy verifies backend server cert | no, `insecureSkipVerify=true` | yes, `backend.caSecretName` + `serverName` | no, `insecureSkipVerify=true` |
+| Proxy verifies backend server cert | no, `insecureSkipVerify=true` | yes, `backend.tls.caSecretName` + `serverName` | no, `insecureSkipVerify=true` |
 | Proxy audit webhook lane | HTTP direct to webhook-tester Service | HTTP direct to webhook-tester Service | HTTP direct to webhook-tester Service |
 | kube-apiserver audit webhook lane | HTTPS to Traefik, then HTTP to webhook-tester | same | same |
 | Browser UI | HTTP port-forward | HTTP port-forward | HTTP port-forward |
@@ -404,19 +414,21 @@ A clean way to support this would be an explicit demo value, not a hidden change
 to all webhook-tester installs. For example:
 
 ```yaml
-webhookTester:
-  proxyDelivery:
-    mode: service | ingress
-    insecureSkipTLSVerify: true
+audit:
+  testWebhookReceiver:
+    proxyDelivery:
+      mode: service | ingress
+      insecureSkipTLSVerify: true
 ```
 
 Or, more generally, a value that overrides only the generated kubeconfig server:
 
 ```yaml
-webhookTester:
-  generatedKubeconfig:
-    server: https://traefik.traefik-system.svc.cluster.local:443/<session>
-    insecureSkipTLSVerify: true
+audit:
+  testWebhookReceiver:
+    generatedKubeconfig:
+      server: https://traefik.traefik-system.svc.cluster.local:443/<session>
+      insecureSkipTLSVerify: true
 ```
 
 The current chart does not implement either option. Right now, the generated
@@ -474,19 +486,21 @@ The chart should continue to make `service` the default because it is the most
 natural in-cluster Kubernetes path:
 
 ```yaml
-webhookTester:
-  proxyDelivery:
-    mode: service
+audit:
+  testWebhookReceiver:
+    proxyDelivery:
+      mode: service
 ```
 
 Then a topology-focused demo can opt into:
 
 ```yaml
-webhookTester:
-  proxyDelivery:
-    mode: ingress
-    server: https://127.0.0.1:30444/<proxy-session-uuid>
-    insecureSkipTLSVerify: true
+audit:
+  testWebhookReceiver:
+    proxyDelivery:
+      mode: ingress
+      server: https://127.0.0.1:30444/<proxy-session-uuid>
+      insecureSkipTLSVerify: true
 ```
 
 That keeps the story clean: the normal e2e verifies the proxy's core behavior,
@@ -503,12 +517,12 @@ unauthenticated requests are rejected.
 
 | Name | Meaning |
 |---|---|
-| `certificates.*` | How the proxy gets its own HTTPS serving certificate |
-| `apiService.*` | How kube-apiserver reaches and trusts the proxy as an aggregated API server |
+| `server.tls.*` | How the proxy gets its own HTTPS serving certificate |
+| `server.apiService.*` | How kube-apiserver reaches and trusts the proxy as an aggregated API server |
 | `requestHeader.*` | How the proxy verifies the kube-apiserver/front-proxy client before trusting delegated identity headers |
 | `backend.*` | How the proxy connects to and authenticates with the real backend |
 | `backend.identity.*` | How the proxy presents the delegated user to the backend: requestheader headers or Kubernetes impersonation |
 | `backend.testApiserver.backendServingCert.*` | Demo-only resources that give the sample backend a server certificate |
 | `backend.testApiserver.backendClientCert.*` | Demo-only resources that give the proxy a client certificate and the sample backend a client-auth CA |
 | `audit.webhook.*` | Which kubeconfig Secret the proxy uses for audit webhook delivery |
-| `webhookTester.*` | Demo-only webhook receiver and UI |
+| `audit.testWebhookReceiver.*` | Demo-only webhook receiver and UI |
