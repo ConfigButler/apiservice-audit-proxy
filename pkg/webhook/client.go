@@ -55,6 +55,16 @@ func NewClientFromKubeconfig(path string, timeout time.Duration) (*Client, error
 	}, nil
 }
 
+// Endpoint returns the configured webhook destination URL. It is exposed so the
+// startup path can log where audit events will be delivered without re-parsing
+// the kubeconfig.
+func (c *Client) Endpoint() *url.URL {
+	if c == nil {
+		return nil
+	}
+	return c.endpoint
+}
+
 // Send posts one EventList to the configured webhook endpoint.
 func (c *Client) Send(ctx context.Context, eventList auditv1.EventList) error {
 	body, err := json.Marshal(eventList)

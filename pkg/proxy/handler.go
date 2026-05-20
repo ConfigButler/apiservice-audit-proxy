@@ -11,6 +11,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	authnv1 "k8s.io/api/authentication/v1"
@@ -51,6 +52,16 @@ type Handler struct {
 	passthrough     *httputil.ReverseProxy
 	tempDir         string
 	captureMax      int64
+
+	// First-event milestones. Each fires exactly once per process lifetime so
+	// an operator can confirm — without enabling per-request logging — that:
+	//   inbound traffic is arriving, the requestheader trust is actually
+	//   verifying identities, the backend is reachable, and the audit webhook
+	//   is accepting deliveries. After the first occurrence these are silent.
+	firstRequest         sync.Once
+	firstVerifiedRequest sync.Once
+	firstBackendOK       sync.Once
+	firstWebhookOK       sync.Once
 }
 
 // userInfoContextKey is the typed context key carrying the verified delegated
@@ -127,6 +138,10 @@ func NewHandler(cfg HandlerConfig) (*Handler, error) {
 				handler.backendIdentity.Apply(pr.Out, user)
 			}
 		},
+		ModifyResponse: func(resp *http.Response) error {
+			handler.notifyFirstBackendOK(resp)
+			return nil
+		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			logger.Error("passthrough proxy request failed", "error", err, "path", r.URL.Path)
 			http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
@@ -140,6 +155,14 @@ func NewHandler(cfg HandlerConfig) (*Handler, error) {
 // emits one best-effort ResponseComplete audit event after the proxied response
 // has been captured.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.firstRequest.Do(func() {
+		h.logger.Info("first inbound request received — proxy is reachable from the cluster",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"remote_addr", r.RemoteAddr,
+		)
+	})
+
 	userInfo, trustedIdentity, err := h.identity.FromRequest(r)
 	if err != nil {
 		h.logger.Warn("rejecting request with untrusted delegated identity", "error", err, "path", r.URL.Path)
@@ -151,6 +174,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
 		return
 	}
+
+	h.firstVerifiedRequest.Do(func() {
+		h.logger.Info("first request with verified delegated identity — requestheader trust is wired correctly",
+			"user", userInfo.Username,
+			"groups", userInfo.Groups,
+			"path", r.URL.Path,
+		)
+	})
 
 	r = r.WithContext(contextWithUserInfo(r.Context(), userInfo))
 
@@ -203,6 +234,7 @@ func (h *Handler) serveAudited(
 		http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
 		return
 	}
+	h.notifyFirstBackendOK(response)
 	defer func() {
 		_ = response.Body.Close()
 	}()
@@ -274,7 +306,28 @@ func (h *Handler) sendBestEffort(event auditv1.Event, path string) {
 
 	if err := h.webhook.Send(ctx, auditevents.Wrap(event)); err != nil {
 		h.logger.Error("best-effort webhook delivery failed", "error", err, "path", path)
+		return
 	}
+	h.firstWebhookOK.Do(func() {
+		h.logger.Info("first audit event delivered to webhook receiver — audit pipeline is healthy",
+			"path", path,
+		)
+	})
+}
+
+// notifyFirstBackendOK fires the first-backend-OK milestone exactly once. It
+// is shared between the audited path (direct RoundTrip) and the passthrough
+// path (httputil.ReverseProxy.ModifyResponse) so either is sufficient evidence
+// that the proxy actually reached the aggregated backend.
+func (h *Handler) notifyFirstBackendOK(resp *http.Response) {
+	if resp == nil {
+		return
+	}
+	h.firstBackendOK.Do(func() {
+		h.logger.Info("first successful backend response — connection to aggregated backend is established",
+			"status", resp.StatusCode,
+		)
+	})
 }
 
 func (h *Handler) buildUpstreamRequest(
