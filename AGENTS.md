@@ -111,7 +111,7 @@ e2e:test-smoke
          ├─ e2e:_services-ready
          │   └─ e2e:flux-bootstrap
          │       └─ e2e:cluster-up
-         └─ Helm testApiserver.enabled=true + webhookTester.enabled=true
+         └─ Helm backend.testApiserver.enabled=true + webhookTester.enabled=true
              └─ chart-generated webhook kubeconfig Secret
 ```
 

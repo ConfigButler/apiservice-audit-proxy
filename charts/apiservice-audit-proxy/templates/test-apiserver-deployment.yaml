@@ -1,4 +1,4 @@
-{{- if .Values.testApiserver.enabled }}
+{{- if .Values.backend.testApiserver.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -7,13 +7,13 @@ metadata:
   labels:
     {{- include "apiservice-audit-proxy.testApiserver.labels" . | nindent 4 }}
 spec:
-  replicas: {{ .Values.testApiserver.replicaCount }}
+  replicas: {{ .Values.backend.testApiserver.replicaCount }}
   selector:
     matchLabels:
       {{- include "apiservice-audit-proxy.testApiserver.selectorLabels" . | nindent 6 }}
   template:
     metadata:
-      {{- with .Values.testApiserver.podAnnotations }}
+      {{- with .Values.backend.testApiserver.podAnnotations }}
       annotations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
@@ -21,22 +21,22 @@ spec:
         {{- include "apiservice-audit-proxy.testApiserver.selectorLabels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "apiservice-audit-proxy.testApiserver.serviceAccountName" . }}
-      {{- with .Values.testApiserver.podSecurityContext }}
+      {{- with .Values.backend.testApiserver.podSecurityContext }}
       securityContext:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       containers:
         - name: wardle-server
-          image: "{{ .Values.testApiserver.image.repository }}:{{ .Values.testApiserver.image.tag }}"
-          imagePullPolicy: {{ .Values.testApiserver.image.pullPolicy }}
-          {{- with .Values.testApiserver.securityContext }}
+          image: "{{ .Values.backend.testApiserver.image.repository }}:{{ .Values.backend.testApiserver.image.tag }}"
+          imagePullPolicy: {{ .Values.backend.testApiserver.image.pullPolicy }}
+          {{- with .Values.backend.testApiserver.securityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           args:
             - --etcd-servers=http://localhost:2379
             - --client-ca-file=/etc/wardle/proxy-client-ca/ca.crt
-            {{- if .Values.testApiserver.backendServingCert.enabled }}
+            {{- if .Values.backend.testApiserver.backendServingCert.enabled }}
             - --tls-cert-file=/etc/wardle/serving-cert/tls.crt
             - --tls-private-key-file=/etc/wardle/serving-cert/tls.key
             {{- end }}
@@ -45,39 +45,39 @@ spec:
               containerPort: 443
               protocol: TCP
           resources:
-            {{- toYaml .Values.testApiserver.resources | nindent 12 }}
+            {{- toYaml .Values.backend.testApiserver.resources | nindent 12 }}
           volumeMounts:
             - mountPath: /etc/wardle/proxy-client-ca
               name: proxy-client-ca
               readOnly: true
-            {{- if .Values.testApiserver.backendServingCert.enabled }}
+            {{- if .Values.backend.testApiserver.backendServingCert.enabled }}
             - mountPath: /etc/wardle/serving-cert
               name: serving-cert
               readOnly: true
             {{- end }}
         - name: etcd
-          image: "{{ .Values.testApiserver.etcd.image.repository }}:{{ .Values.testApiserver.etcd.image.tag }}"
-          imagePullPolicy: {{ .Values.testApiserver.etcd.image.pullPolicy }}
+          image: "{{ .Values.backend.testApiserver.etcd.image.repository }}:{{ .Values.backend.testApiserver.etcd.image.tag }}"
+          imagePullPolicy: {{ .Values.backend.testApiserver.etcd.image.pullPolicy }}
           resources:
-            {{- toYaml .Values.testApiserver.etcdResources | nindent 12 }}
+            {{- toYaml .Values.backend.testApiserver.etcdResources | nindent 12 }}
       volumes:
         - name: proxy-client-ca
           secret:
             secretName: {{ include "apiservice-audit-proxy.testApiserver.clientCASecretName" . }}
-        {{- if .Values.testApiserver.backendServingCert.enabled }}
+        {{- if .Values.backend.testApiserver.backendServingCert.enabled }}
         - name: serving-cert
           secret:
             secretName: {{ include "apiservice-audit-proxy.testApiserver.servingCertSecretName" . }}
         {{- end }}
-      {{- with .Values.testApiserver.nodeSelector }}
+      {{- with .Values.backend.testApiserver.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.testApiserver.affinity }}
+      {{- with .Values.backend.testApiserver.affinity }}
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.testApiserver.tolerations }}
+      {{- with .Values.backend.testApiserver.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}

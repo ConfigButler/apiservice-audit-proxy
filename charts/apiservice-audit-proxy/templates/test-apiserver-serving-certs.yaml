@@ -1,4 +1,4 @@
-{{- if and .Values.testApiserver.enabled .Values.testApiserver.backendServingCert.enabled }}
+{{- if and .Values.backend.testApiserver.enabled .Values.backend.testApiserver.backendServingCert.enabled }}
 apiVersion: cert-manager.io/v1
 kind: Issuer
 metadata:

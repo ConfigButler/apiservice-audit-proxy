@@ -38,10 +38,11 @@ The proxy sends synthetic audit events through `pkg/webhook`, which builds an
 HTTP client from a kubeconfig-style file. The chart mounts that file from:
 
 ```yaml
-webhook:
-  kubeconfigSecretName: audit-pass-through-webhook-kubeconfig
-  kubeconfigKey: kubeconfig
-  timeout: 5s
+audit:
+  webhook:
+    kubeconfigSecretName: audit-pass-through-webhook-kubeconfig
+    kubeconfigKey: kubeconfig
+    timeout: 5s
 ```
 
 For GitOps Reverser, that Secret should point at the GitOps Reverser audit
@@ -173,7 +174,7 @@ Use two different operating models:
 
 1. **Proxy webhook delivery to GitOps Reverser**
 
-   Manage the proxy's `webhook.kubeconfigSecretName` as an in-cluster Secret
+   Manage the proxy's `audit.webhook.kubeconfigSecretName` as an in-cluster Secret
    generated from GitOps Reverser's stable audit root CA. This can be automated
    by Helm, Flux, Kustomize, trust-manager, reflector, or a small controller.
 

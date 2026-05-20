@@ -17,8 +17,8 @@ server for each hop:
 |---|---|---|---|---|
 | Kubernetes API aggregation | kube-apiserver | apiservice-audit-proxy | HTTPS | `certificates.*`, `apiService.*` |
 | Delegated user identity | kube-apiserver/front-proxy | apiservice-audit-proxy | same HTTPS request | `requestHeader.*` |
-| Backend API call | apiservice-audit-proxy | sample-apiserver | HTTPS | `backend.*`, `testApiserver.backendServingCert.*`, `testApiserver.backendClientCert.*` |
-| Proxy audit webhook, Lane B | apiservice-audit-proxy | webhook-tester | HTTP Service | `webhook.*`, `webhookTester.*` |
+| Backend API call | apiservice-audit-proxy | sample-apiserver | HTTPS | `backend.*`, `backend.testApiserver.backendServingCert.*`, `backend.testApiserver.backendClientCert.*` |
+| Proxy audit webhook, Lane B | apiservice-audit-proxy | webhook-tester | HTTP Service | `audit.webhook.*`, `webhookTester.*` |
 | Native kube-apiserver audit webhook, Lane A | kube-apiserver | Traefik, then webhook-tester | HTTPS to Traefik, HTTP to webhook-tester | `test/e2e/cluster/audit/webhook-config.yaml`, Traefik Flux values |
 | Human browser UI | developer browser | webhook-tester | HTTP port-forward | `e2e:portforward-webhook-tester` |
 
@@ -133,14 +133,15 @@ backend:
 Demo backend controls:
 
 ```yaml
-testApiserver:
-  backendServingCert:
-    enabled: true
-    selfSignedIssuerName: audit-pass-through-backend-serving-selfsigned
-    caSecretName: audit-pass-through-backend-serving-ca
-    caIssuerName: audit-pass-through-backend-serving-ca-issuer
-    certSecretName: audit-pass-through-backend-serving-cert
-    dnsNames: []
+backend:
+  testApiserver:
+    backendServingCert:
+      enabled: true
+      selfSignedIssuerName: audit-pass-through-backend-serving-selfsigned
+      caSecretName: audit-pass-through-backend-serving-ca
+      caIssuerName: audit-pass-through-backend-serving-ca-issuer
+      certSecretName: audit-pass-through-backend-serving-cert
+      dnsNames: []
 ```
 
 When enabled, the chart creates a backend-serving CA, a backend serving
@@ -185,12 +186,13 @@ backend:
 Demo backend controls:
 
 ```yaml
-testApiserver:
-  backendClientCert:
-    selfSignedIssuerName: audit-pass-through-backend-selfsigned
-    caSecretName: audit-pass-through-backend-client-ca
-    caIssuerName: audit-pass-through-backend-client-ca-issuer
-    clientSecretName: audit-pass-through-backend-client-cert
+backend:
+  testApiserver:
+    backendClientCert:
+      selfSignedIssuerName: audit-pass-through-backend-selfsigned
+      caSecretName: audit-pass-through-backend-client-ca
+      caIssuerName: audit-pass-through-backend-client-ca-issuer
+      clientSecretName: audit-pass-through-backend-client-cert
 ```
 
 The chart creates a client-auth CA and a proxy client certificate. It mounts the
@@ -253,10 +255,11 @@ The proxy emits synthetic audit events using a kubeconfig-style webhook client.
 The chart always mounts the Secret named by:
 
 ```yaml
-webhook:
-  kubeconfigSecretName: audit-pass-through-webhook-kubeconfig
-  kubeconfigKey: kubeconfig
-  timeout: 5s
+audit:
+  webhook:
+    kubeconfigSecretName: audit-pass-through-webhook-kubeconfig
+    kubeconfigKey: kubeconfig
+    timeout: 5s
 ```
 
 When `webhookTester.enabled=true`, the chart generates that Secret and points
@@ -280,7 +283,7 @@ For a production HTTPS audit webhook, the TLS settings belong in the supplied
 kubeconfig Secret. A kubeconfig can carry or reference CA data, client
 certificates, client keys, bearer tokens, and other standard client auth
 material. In that mode, leave `webhookTester.enabled=false` or override
-`webhook.kubeconfigSecretName` with a Secret you manage.
+`audit.webhook.kubeconfigSecretName` with a Secret you manage.
 
 Template:
 
@@ -505,7 +508,7 @@ unauthenticated requests are rejected.
 | `requestHeader.*` | How the proxy verifies the kube-apiserver/front-proxy client before trusting delegated identity headers |
 | `backend.*` | How the proxy connects to and authenticates with the real backend |
 | `backend.identity.*` | How the proxy presents the delegated user to the backend: requestheader headers or Kubernetes impersonation |
-| `testApiserver.backendServingCert.*` | Demo-only resources that give the sample backend a server certificate |
-| `testApiserver.backendClientCert.*` | Demo-only resources that give the proxy a client certificate and the sample backend a client-auth CA |
-| `webhook.*` | Which kubeconfig Secret the proxy uses for audit webhook delivery |
+| `backend.testApiserver.backendServingCert.*` | Demo-only resources that give the sample backend a server certificate |
+| `backend.testApiserver.backendClientCert.*` | Demo-only resources that give the proxy a client certificate and the sample backend a client-auth CA |
+| `audit.webhook.*` | Which kubeconfig Secret the proxy uses for audit webhook delivery |
 | `webhookTester.*` | Demo-only webhook receiver and UI |
