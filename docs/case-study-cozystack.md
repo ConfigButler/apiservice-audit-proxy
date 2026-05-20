@@ -199,30 +199,29 @@ secret `cozystack-api-cert`).
 
 ```yaml
 backend:
-  insecureSkipVerify: false        # prefer false outside prototyping
-  caSecretName: "<ca-bundle>"      # CA that signed cozystack-api-cert
-  serverName: "cozystack-api.cozy-system.svc"   # set if the SAN needs an explicit match
+  tls:
+    insecureSkipVerify: false        # prefer false outside prototyping
+    caSecretName: "<ca-bundle>"      # CA that signed cozystack-api-cert
+    serverName: "cozystack-api.cozy-system.svc"   # set if the SAN needs an explicit match
 ```
 
 `insecureSkipVerify: true` is acceptable only for first-light prototyping.
 
 #### 3. Inbound requestheader trust
 
-In impersonation mode the chart currently *requires* an explicit front-proxy CA
-and allowed names so the proxy can verify the front kube-apiserver before
-trusting `X-Remote-*`:
+In impersonation mode the proxy must verify the front kube-apiserver before
+trusting `X-Remote-*`. That trust is sourced from the cluster's
+`kube-system/extension-apiserver-authentication` ConfigMap rather than from
+chart values:
 
 ```yaml
-requestHeader:
-  clientCASecretName: "<aggregator-front-proxy-ca>"
-  allowedNames: ["front-proxy-client"]   # the kube-apiserver proxy-client CN
+# No requestHeader: values are required.
+# The chart renders the auth-reader RoleBinding the proxy needs.
 ```
 
-The CA here is the cluster's aggregator / front-proxy CA, published in
-`kube-system/extension-apiserver-authentication`. Sourcing it automatically
-instead of by hand is the subject of
-[`requestheader-trust-design.md`](requestheader-trust-design.md); until that
-lands, these two values are mandatory.
+The ConfigMap carries the cluster's aggregator/front-proxy CA, accepted client
+names, and requestheader names. If the proxy cannot read it or cannot build a
+usable trust snapshot, startup fails closed.
 
 #### 4. Extras projection — default to `none`
 
@@ -276,7 +275,7 @@ The proxy stays a transparent forwarder; CozyStack's tenant RBAC is unchanged.
 |---|---|---|
 | `403 … cannot impersonate resource "users"` | proxy SA lacks `impersonate` RBAC | Knob B — `rbac.create=true` |
 | `APIService Available=False`, `FailedDiscoveryCheck`, message contains `403` | same — the discovery probe is impersonated and denied | Knob B |
-| `401 Unauthorized` at the proxy | front-proxy cert not trusted / not presented | Knob 3 — `requestHeader.*` |
+| `401 Unauthorized` at the proxy | front-proxy cert not trusted / not presented | Knob 3 — cluster requestheader trust / auth-reader RoleBinding |
 | TLS error proxy → backend | proxy does not trust `cozystack-api`'s serving cert | Knob 2 |
 | `403` on a real operation, RBAC for impersonation is present | the *impersonated user* lacks RBAC on the CozyStack resource | expected — fix the tenant's RBAC, not the proxy |
 | `403 … cannot impersonate … userextras/...` | an extra is forwarded without matching RBAC | Knob 4 — `extras.mode=none` |
@@ -293,8 +292,9 @@ failing" from "front aggregation auth is failing".
    `backend.url=https://cozystack-api.cozy-system.svc:443`,
    `backend.identity.impersonation.rbac.create=true`.
 3. Backend TLS trust set (Knob 2).
-4. `requestHeader.clientCASecretName` + `requestHeader.allowedNames` set
-   (Knob 3).
+4. The proxy ServiceAccount can read
+   `kube-system/extension-apiserver-authentication` through the chart's
+   auth-reader RoleBinding (Knob 3).
 5. `extras.mode=none` unless a specific extra is required (Knob 4).
 6. Two `APIService` objects (`apps` + `core`) point at the proxy Service with a
    valid `caBundle` (Knob 5).

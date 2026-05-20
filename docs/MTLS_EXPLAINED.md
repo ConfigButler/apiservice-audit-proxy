@@ -240,10 +240,10 @@ This is the cleanest "true mTLS" example in the repo.
 You can see it in the e2e setup:
 
 - the backend trusts a client CA:
-  [test-apiserver-deployment.yaml](../charts/apiservice-audit-proxy/templates/test-apiserver-deployment.yaml)
+  [deployment.yaml](../charts/apiservice-audit-proxy/templates/test-apiserver/deployment.yaml)
 - cert-manager issues a client certificate for the proxy with `client auth`
   usage:
-  [test-apiserver-client-certs.yaml](../charts/apiservice-audit-proxy/templates/test-apiserver-client-certs.yaml)
+  [tls-client.yaml](../charts/apiservice-audit-proxy/templates/test-apiserver/tls-client.yaml)
 - the proxy mounts and uses that certificate:
   [test/e2e/values/proxy-cert-manager.yaml](../test/e2e/values/proxy-cert-manager.yaml)
 
@@ -251,7 +251,7 @@ There is also a stricter backend-serving-cert path in the e2e setup where the
 backend gets its own serving certificate and the proxy validates it via an
 explicit CA instead of skipping verification:
 
-- [test-apiserver-serving-certs.yaml](../charts/apiservice-audit-proxy/templates/test-apiserver-serving-certs.yaml)
+- [tls-serving.yaml](../charts/apiservice-audit-proxy/templates/test-apiserver/tls-serving.yaml)
 - [proxy-cert-manager-backend-ca.yaml](../test/e2e/values/proxy-cert-manager-backend-ca.yaml)
 
 ## 3. apiservice-audit-proxy -> audit webhook

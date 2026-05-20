@@ -23,7 +23,7 @@ helm install apiservice-audit-proxy \
   --version <version> \
   --namespace audit-pass-through-system \
   --set backend.url=https://wardle-server.wardle.svc \
-  --set webhook.kubeconfigSecretName=audit-webhook-kubeconfig \
+  --set audit.webhook.kubeconfigSecretName=audit-webhook-kubeconfig \
   ...
 ```
 
