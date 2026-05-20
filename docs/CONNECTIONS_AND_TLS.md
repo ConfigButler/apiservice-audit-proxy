@@ -98,7 +98,6 @@ requestheader CA carries no verified identity and is rejected by the handler.
 Because the trust comes from the cluster, aggregator CA rotation is picked up
 live, with no restart and no Secret update. There is no flag whose omission
 yields an unverified proxy; the insecure mode was deleted, not defaulted-off.
-See [`requestheader-trust-design.md`](requestheader-trust-design.md).
 
 ## 3. Proxy to Backend
 

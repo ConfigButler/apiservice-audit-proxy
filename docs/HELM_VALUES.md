@@ -12,7 +12,7 @@ Use this page with the full defaults in
 | Decision | Values | What to choose |
 |---|---|---|
 | Proxy serving certificate | `server.tls.mode` | Use `cert-manager` when the cluster can issue serving certs, `existing-secret` when another platform owns the cert, or `self-signed` for a chart-managed CA with no external dependencies. |
-| APIService registration | `server.apiService.*` | Enable it when the chart should register this proxy as the aggregated API backend. Leave it disabled if another controller owns the `APIService`. |
+| APIService registration | `server.apiService.*` | Enable it when the chart should register this proxy as the aggregated API backend. Leave it disabled if another controller owns the `APIService`; that controller or install layer must then point the existing `APIService` at the proxy Service and wire the proxy CA. |
 | Backend server trust | `backend.tls.caSecretName`, `backend.tls.serverName`, `backend.tls.insecureSkipVerify` | Prefer CA validation. Use `insecureSkipVerify=true` only for local/dev paths or while bootstrapping a demo. |
 | Backend identity | `backend.identity.mode` | `impersonation` is the default. Use `requestheader` when the real backend trusts front-proxy `X-Remote-*` identity. Use `impersonation` when the backend can authorize Kubernetes impersonation and you do not want to provision a backend client private key. |
 | Inbound requestheader trust | (no chart control) | Sourced live from the cluster's `kube-system/extension-apiserver-authentication` ConfigMap. The chart's kube-system RoleBinding grants the proxy ServiceAccount read access. |
@@ -143,6 +143,14 @@ tightly controlled and the backend truly needs every extra. It renders broad
 
 ## Certificate Modes
 
+`server.tls.*` controls the proxy's own HTTPS serving certificate. If
+`server.apiService.enabled=true`, the chart also wires kube-apiserver trust for
+the chart-rendered `APIService`. If `server.apiService.enabled=false`, as in a
+CozyStack integration where the platform already owns its `APIService` objects,
+the same serving certificate is still used by the proxy pod, but the external
+install layer must update the existing `APIService` objects with the matching
+`spec.caBundle` or cert-manager injection annotation.
+
 ### `cert-manager`
 
 Use this when cert-manager is installed and should issue the proxy serving
@@ -159,7 +167,10 @@ server:
         name: apiservice-audit-proxy-issuer
 ```
 
-In this mode the chart annotates the `APIService` for cert-manager CA injection.
+In this mode the chart annotates the chart-rendered `APIService` for
+cert-manager CA injection. If the chart is not rendering the `APIService`, add
+the equivalent injection annotation to the externally owned `APIService`
+objects, or copy the issued CA into their `spec.caBundle`.
 
 ### `existing-secret`
 
@@ -175,7 +186,9 @@ server:
 ```
 
 This is often the right production mode when certificate lifecycle is centralized
-outside the chart.
+outside the chart. `server.apiService.caBundle` only affects an APIService
+rendered by this chart; externally owned APIService objects need their own CA
+wiring.
 
 ### `self-signed`
 
@@ -195,5 +208,6 @@ into `APIService.spec.caBundle` so kube-apiserver verifies the proxy normally
 Secret and re-emits it verbatim, so the cert persists across `helm upgrade`.
 
 This mode is the default and is appropriate for environments where running
-cert-manager or wiring up an external Secret is overkill.
-
+cert-manager or wiring up an external Secret is overkill. When the APIService is
+externally owned, read `ca.crt` from the generated serving TLS Secret and apply
+it to those existing APIService objects.
