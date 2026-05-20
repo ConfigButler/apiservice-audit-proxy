@@ -1,0 +1,76 @@
+{{- if eq (include "apiservice-audit-proxy.certificateMode" .) "self-signed" }}
+{{- /*
+Self-signed mode renders BOTH the serving-cert Secret AND (when enabled) the
+APIService in this single file, so the generated CA can be shared between them.
+Helm's genCA is non-deterministic per call, and lookup returns empty on first
+install -- so splitting the rendering across two templates would either produce
+mismatched CAs or leave the APIService with an empty caBundle on day one.
+
+apiservice.yaml renders the APIService for cert-manager and existing-secret
+modes; this file owns the self-signed case.
+*/}}
+{{- $secretName := include "apiservice-audit-proxy.servingSecretName" . -}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $secretName -}}
+{{- $tlsCrt := "" -}}
+{{- $tlsKey := "" -}}
+{{- $caCrt  := "" -}}
+{{- if $existing }}
+  {{- $tlsCrt = index $existing.data "tls.crt" -}}
+  {{- $tlsKey = index $existing.data "tls.key" -}}
+  {{- if hasKey $existing.data "ca.crt" }}
+    {{- $caCrt = index $existing.data "ca.crt" -}}
+  {{- end }}
+{{- else }}
+  {{- $dnsNames := list
+        (include "apiservice-audit-proxy.fullname" .)
+        (printf "%s.%s" (include "apiservice-audit-proxy.fullname" .) .Release.Namespace)
+        (printf "%s.%s.svc" (include "apiservice-audit-proxy.fullname" .) .Release.Namespace)
+        (printf "%s.%s.svc.cluster.local" (include "apiservice-audit-proxy.fullname" .) .Release.Namespace) -}}
+  {{- $ca := genCA (printf "%s-self-signed-ca" (include "apiservice-audit-proxy.fullname" .)) 3650 -}}
+  {{- $cert := genSignedCert (include "apiservice-audit-proxy.fullname" .) nil $dnsNames 3650 $ca -}}
+  {{- $tlsCrt = $cert.Cert | b64enc -}}
+  {{- $tlsKey = $cert.Key  | b64enc -}}
+  {{- $caCrt  = $ca.Cert   | b64enc -}}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secretName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "apiservice-audit-proxy.labels" . | nindent 4 }}
+type: kubernetes.io/tls
+data:
+  tls.crt: {{ $tlsCrt }}
+  tls.key: {{ $tlsKey }}
+  {{- if $caCrt }}
+  ca.crt: {{ $caCrt }}
+  {{- end }}
+{{- if .Values.server.apiService.enabled }}
+---
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: {{ required "server.apiService.name is required when server.apiService.enabled=true" .Values.server.apiService.name }}
+  {{- with .Values.server.apiService.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  labels:
+    {{- include "apiservice-audit-proxy.labels" . | nindent 4 }}
+spec:
+  group: {{ required "server.apiService.group is required when server.apiService.enabled=true" .Values.server.apiService.group }}
+  groupPriorityMinimum: {{ .Values.server.apiService.groupPriorityMinimum }}
+  versionPriority: {{ .Values.server.apiService.versionPriority }}
+  version: {{ required "server.apiService.version is required when server.apiService.enabled=true" .Values.server.apiService.version }}
+  service:
+    name: {{ include "apiservice-audit-proxy.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+    port: {{ .Values.server.service.port }}
+  {{- if .Values.server.apiService.insecureSkipTLSVerify }}
+  insecureSkipTLSVerify: true
+  {{- else if $caCrt }}
+  caBundle: {{ $caCrt | quote }}
+  {{- end }}
+{{- end }}
+{{- end }}

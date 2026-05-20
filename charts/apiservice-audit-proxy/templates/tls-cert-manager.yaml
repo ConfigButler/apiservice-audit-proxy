@@ -1,5 +1,5 @@
 {{- if eq (include "apiservice-audit-proxy.certificateMode" .) "cert-manager" }}
-{{- if .Values.certificates.certManager.createSelfSignedIssuer }}
+{{- if .Values.server.tls.certManager.createSelfSignedIssuer }}
 apiVersion: cert-manager.io/v1
 kind: Issuer
 metadata:
@@ -20,14 +20,14 @@ metadata:
     {{- include "apiservice-audit-proxy.labels" . | nindent 4 }}
 spec:
   secretName: {{ include "apiservice-audit-proxy.servingSecretName" . }}
-  duration: {{ .Values.certificates.certManager.duration }}
-  renewBefore: {{ .Values.certificates.certManager.renewBefore }}
+  duration: {{ .Values.server.tls.certManager.duration }}
+  renewBefore: {{ .Values.server.tls.certManager.renewBefore }}
   privateKey:
     rotationPolicy: Always
   issuerRef:
     name: {{ include "apiservice-audit-proxy.servingIssuerName" . }}
-    kind: {{ .Values.certificates.certManager.issuerRef.kind }}
-    group: {{ .Values.certificates.certManager.issuerRef.group }}
+    kind: {{ .Values.server.tls.certManager.issuerRef.kind }}
+    group: {{ .Values.server.tls.certManager.issuerRef.group }}
   dnsNames:
     {{- include "apiservice-audit-proxy.servingDNSNames" . | nindent 4 }}
 {{- end }}

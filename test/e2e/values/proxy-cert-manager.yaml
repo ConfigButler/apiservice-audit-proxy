@@ -1,21 +1,35 @@
-service:
-  port: 443
+server:
+  service:
+    port: 443
+  containerPort: 9445
 
-containerPort: 9445
+  apiService:
+    enabled: true
+    name: v1alpha1.wardle.example.com
+    group: wardle.example.com
+    version: v1alpha1
+    groupPriorityMinimum: 1000
+    versionPriority: 15
 
-apiService:
-  enabled: true
-  name: v1alpha1.wardle.example.com
-  group: wardle.example.com
-  version: v1alpha1
-  groupPriorityMinimum: 1000
-  versionPriority: 15
+  tls:
+    mode: cert-manager
+    certManager:
+      createSelfSignedIssuer: true
 
 backend:
   url: https://api-backend.wardle.svc.cluster.local:443
-  insecureSkipVerify: true
-  clientCertSecretName: audit-pass-through-backend-client-cert
-  serverName: api-backend.wardle.svc.cluster.local
+
+  tls:
+    insecureSkipVerify: true
+    serverName: api-backend.wardle.svc.cluster.local
+
+  # Pin requestheader for this cert-manager TLS smoke test (the new default is
+  # impersonation, which would also require rbac.create=true here).
+  identity:
+    mode: requestheader
+    requestheader:
+      clientCert:
+        secretName: audit-pass-through-backend-client-cert
 
   testApiserver:
     enabled: true
@@ -29,8 +43,3 @@ backend:
 audit:
   webhook:
     kubeconfigSecretName: audit-pass-through-webhook-kubeconfig
-
-certificates:
-  mode: cert-manager
-  certManager:
-    createSelfSignedIssuer: true

@@ -106,7 +106,7 @@ The chart keeps production defaults in `values.yaml`; demo components are
 explicit opt-ins:
 
 - `backend.testApiserver.enabled`: deploys the Wardle sample aggregated API backend.
-- `webhookTester.enabled`: deploys webhook-tester and generates a proxy webhook
+- `audit.testWebhookReceiver.enabled`: deploys webhook-tester and generates a proxy webhook
   kubeconfig Secret for demo audit events.
 
 Render the coordinated demo values with:

@@ -1,21 +1,31 @@
 # Demo values for a complete local install:
-# - Wardle sample-apiserver backend
+# - Wardle sample-apiserver (the demo backend) at backend.testApiserver
 # - apiservice-audit-proxy fronting that backend
-# - webhook-tester receiving proxy audit events
+# - webhook-tester (the demo audit receiver) at audit.testWebhookReceiver
 #
-# These values are intentionally explicit. The chart templates do not reinterpret
-# top-level proxy settings when demo components are enabled.
+# This demo pins backend.identity.mode=requestheader: it uses backend mTLS
+# client cert auth (the testApiserver path that's already wired up here). The
+# default chart value is impersonation, which is exercised by the dedicated
+# impersonation e2e values (test/e2e/values/proxy-impersonation.yaml).
 
-apiService:
-  enabled: true
-  group: wardle.example.com
-  name: v1alpha1.wardle.example.com
-  version: v1alpha1
+server:
+  apiService:
+    enabled: true
+    group: wardle.example.com
+    name: v1alpha1.wardle.example.com
+    version: v1alpha1
 
 backend:
   url: "https://api-backend.wardle.svc:443"
-  insecureSkipVerify: true
-  clientCertSecretName: audit-pass-through-backend-client-cert
+
+  tls:
+    insecureSkipVerify: true
+
+  identity:
+    mode: requestheader
+    requestheader:
+      clientCert:
+        secretName: audit-pass-through-backend-client-cert
 
   testApiserver:
     enabled: true
@@ -26,5 +36,6 @@ backend:
       caIssuerName: audit-pass-through-backend-client-ca-issuer
       clientSecretName: audit-pass-through-backend-client-cert
 
-webhookTester:
-  enabled: true
+audit:
+  testWebhookReceiver:
+    enabled: true

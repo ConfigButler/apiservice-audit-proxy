@@ -1,20 +1,28 @@
-service:
-  port: 443
+server:
+  service:
+    port: 443
+  containerPort: 9445
 
-containerPort: 9445
+  apiService:
+    enabled: true
+    name: v1alpha1.wardle.example.com
+    group: wardle.example.com
+    version: v1alpha1
+    groupPriorityMinimum: 1000
+    versionPriority: 15
 
-apiService:
-  enabled: true
-  name: v1alpha1.wardle.example.com
-  group: wardle.example.com
-  version: v1alpha1
-  groupPriorityMinimum: 1000
-  versionPriority: 15
+  tls:
+    mode: cert-manager
+    certManager:
+      createSelfSignedIssuer: true
 
 backend:
   url: https://api-backend.wardle.svc.cluster.local:443
-  insecureSkipVerify: true
-  serverName: api-backend.wardle.svc.cluster.local
+
+  tls:
+    insecureSkipVerify: true
+    serverName: api-backend.wardle.svc.cluster.local
+
   # Impersonation mode: the proxy calls the backend as its own ServiceAccount
   # and translates the verified user into Impersonate-* headers. No backend
   # client certificate is needed.
@@ -41,8 +49,3 @@ backend:
 audit:
   webhook:
     kubeconfigSecretName: audit-pass-through-webhook-kubeconfig
-
-certificates:
-  mode: cert-manager
-  certManager:
-    createSelfSignedIssuer: true

@@ -1,0 +1,57 @@
+{{- if .Values.audit.testWebhookReceiver.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "apiservice-audit-proxy.testWebhookReceiver.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "apiservice-audit-proxy.testWebhookReceiver.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.audit.testWebhookReceiver.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "apiservice-audit-proxy.testWebhookReceiver.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "apiservice-audit-proxy.testWebhookReceiver.selectorLabels" . | nindent 8 }}
+      {{- with .Values.audit.testWebhookReceiver.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      securityContext:
+        {{- toYaml .Values.audit.testWebhookReceiver.podSecurityContext | nindent 8 }}
+      containers:
+        - name: webhook-tester
+          image: "{{ .Values.audit.testWebhookReceiver.image.repository }}:{{ .Values.audit.testWebhookReceiver.image.tag }}"
+          imagePullPolicy: {{ .Values.audit.testWebhookReceiver.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.audit.testWebhookReceiver.securityContext | nindent 12 }}
+          args:
+            - start
+            - --storage-driver=memory
+            - --max-requests={{ .Values.audit.testWebhookReceiver.maxRequests }}
+            - --auto-create-sessions
+            - --port=8080
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+          resources:
+            {{- toYaml .Values.audit.testWebhookReceiver.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}

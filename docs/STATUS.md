@@ -31,8 +31,8 @@ is implemented, and the complete demo install now lives in
 | Area | State | Evidence |
 |---|---|---|
 | webhook-tester Helm templates (Deployment / Service / Ingress) | Done | [webhook-tester-deployment.yaml](../charts/apiservice-audit-proxy/templates/webhook-tester-deployment.yaml), [webhook-tester-service.yaml](../charts/apiservice-audit-proxy/templates/webhook-tester-service.yaml), [webhook-tester-ingress.yaml](../charts/apiservice-audit-proxy/templates/webhook-tester-ingress.yaml) |
-| Auto-generated webhook kubeconfig Secret (Lane B) | Done | [webhook-tester-kubeconfig-secret.yaml](../charts/apiservice-audit-proxy/templates/webhook-tester-kubeconfig-secret.yaml) writes the Secret named by `webhook.kubeconfigSecretName` when `webhookTester.enabled=true` |
-| `webhookTester` values block + helpers | Done | [values.yaml](../charts/apiservice-audit-proxy/values.yaml), [_helpers.tpl](../charts/apiservice-audit-proxy/templates/_helpers.tpl) |
+| Auto-generated webhook kubeconfig Secret (Lane B) | Done | [webhook-tester-kubeconfig-secret.yaml](../charts/apiservice-audit-proxy/templates/webhook-tester-kubeconfig-secret.yaml) writes the Secret named by `audit.webhook.kubeconfigSecretName` when `audit.testWebhookReceiver.enabled=true` |
+| `audit.testWebhookReceiver` values block + helpers | Done | [values.yaml](../charts/apiservice-audit-proxy/values.yaml), [_helpers.tpl](../charts/apiservice-audit-proxy/templates/_helpers.tpl) |
 | Helm `NOTES.txt` shows Lane A and Lane B URLs side by side | Done | [NOTES.txt](../charts/apiservice-audit-proxy/templates/NOTES.txt) |
 | kube-apiserver audit policy + webhook config | Done | [policy.yaml](../test/e2e/cluster/audit/policy.yaml), [webhook-config.yaml](../test/e2e/cluster/audit/webhook-config.yaml) |
 | k3d startup can bake in the native audit webhook | Done | [start-cluster.sh](../test/e2e/cluster/start-cluster.sh) |
@@ -44,7 +44,7 @@ is implemented, and the complete demo install now lives in
 | Proxy pod restarts when the Helm-managed webhook kubeconfig changes | Done | [deployment.yaml](../charts/apiservice-audit-proxy/templates/deployment.yaml) includes `checksum/webhook-kubeconfig` when webhook-tester is enabled |
 | `mock-audit-webhook` binary, manifests, script, Docker build arg, and Tilt resource removed | Done | [Dockerfile](../Dockerfile), [Taskfile.e2e.yml](../Taskfile.e2e.yml), [Tiltfile](../Tiltfile) |
 | Optional `testApiserver` Helm deployment | Done | [test-apiserver-deployment.yaml](../charts/apiservice-audit-proxy/templates/test-apiserver-deployment.yaml), [test-apiserver-service.yaml](../charts/apiservice-audit-proxy/templates/test-apiserver-service.yaml), [test-apiserver-rbac.yaml](../charts/apiservice-audit-proxy/templates/test-apiserver-rbac.yaml), [test-apiserver-client-certs.yaml](../charts/apiservice-audit-proxy/templates/test-apiserver-client-certs.yaml), [test-apiserver-serving-certs.yaml](../charts/apiservice-audit-proxy/templates/test-apiserver-serving-certs.yaml) |
-| Explicit full-demo values file | Done | [values-demo.yaml](../charts/apiservice-audit-proxy/values-demo.yaml) enables `testApiserver`, `webhookTester`, APIService registration, backend URL, and backend mTLS together |
+| Explicit full-demo values file | Done | [values-demo.yaml](../charts/apiservice-audit-proxy/values-demo.yaml) enables `testApiserver`, `audit.testWebhookReceiver`, APIService registration, backend URL, and backend mTLS together |
 
 ### Devcontainer / Tooling
 

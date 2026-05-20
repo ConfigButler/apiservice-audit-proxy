@@ -1,4 +1,4 @@
-{{- $identityMode := .Values.backend.identity.mode | default "requestheader" -}}
+{{- $identityMode := .Values.backend.identity.mode -}}
 {{- $impersonation := .Values.backend.identity.impersonation -}}
 {{- $extrasMode := $impersonation.extras.mode | default "none" -}}
 {{- if hasKey .Values.backend "identityMode" }}
@@ -29,10 +29,8 @@
 {{- if and (eq $extrasMode "allowlist") (not $impersonation.extras.keys) }}
 {{- fail "backend.identity.impersonation.extras.keys must be set when backend.identity.impersonation.extras.mode=allowlist" }}
 {{- end }}
-{{- if .Values.backend.clientCertSecretName }}
-{{- fail "backend.clientCertSecretName is not supported when backend.identity.mode=impersonation" }}
 {{- end }}
-{{- end }}
+{{- $requestheaderClientCert := .Values.backend.identity.requestheader.clientCert -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -49,8 +47,8 @@ spec:
     metadata:
       annotations:
         kubectl.kubernetes.io/default-container: server
-        {{- if .Values.webhookTester.enabled }}
-        checksum/webhook-kubeconfig: {{ include (print $.Template.BasePath "/webhook-tester-kubeconfig-secret.yaml") . | sha256sum }}
+        {{- if .Values.audit.testWebhookReceiver.enabled }}
+        checksum/webhook-kubeconfig: {{ include (print $.Template.BasePath "/test-webhookreceiver/kubeconfig-secret.yaml") . | sha256sum }}
         {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
@@ -72,28 +70,28 @@ spec:
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
           args:
-            - --listen-address={{ .Values.listenAddress }}
+            - --listen-address={{ .Values.server.listenAddress }}
             - --backend-url={{ required "backend.url is required" .Values.backend.url }}
             - --webhook-kubeconfig={{ include "apiservice-audit-proxy.paths.webhook" . }}/{{ .Values.audit.webhook.kubeconfigKey }}
             - --webhook-timeout={{ .Values.audit.webhook.timeout }}
             - --max-audit-body-bytes={{ .Values.audit.maxBodyBytes | int }}
-            {{- if .Values.backend.insecureSkipVerify }}
+            {{- if .Values.backend.tls.insecureSkipVerify }}
             - --backend-insecure-skip-verify
             {{- end }}
-            {{- if .Values.backend.serverName }}
-            - --backend-server-name={{ .Values.backend.serverName }}
+            {{- if .Values.backend.tls.serverName }}
+            - --backend-server-name={{ .Values.backend.tls.serverName }}
             {{- end }}
             {{- if .Values.audit.captureTempDir }}
             - --capture-temp-dir={{ .Values.audit.captureTempDir }}
             {{- end }}
             - --tls-cert-file={{ include "apiservice-audit-proxy.paths.tls" . }}/tls.crt
             - --tls-private-key-file={{ include "apiservice-audit-proxy.paths.tls" . }}/tls.key
-            {{- if .Values.backend.caSecretName }}
-            - --backend-ca-file={{ include "apiservice-audit-proxy.paths.backendCA" . }}/{{ .Values.backend.caFileName }}
+            {{- if .Values.backend.tls.caSecretName }}
+            - --backend-ca-file={{ include "apiservice-audit-proxy.paths.backendCA" . }}/{{ .Values.backend.tls.caFileName }}
             {{- end }}
-            {{- if .Values.backend.clientCertSecretName }}
-            - --backend-client-cert-file={{ include "apiservice-audit-proxy.paths.backendClient" . }}/{{ .Values.backend.clientCertFileName }}
-            - --backend-client-key-file={{ include "apiservice-audit-proxy.paths.backendClient" . }}/{{ .Values.backend.clientKeyFileName }}
+            {{- if and (eq $identityMode "requestheader") $requestheaderClientCert.secretName }}
+            - --backend-client-cert-file={{ include "apiservice-audit-proxy.paths.backendClient" . }}/{{ $requestheaderClientCert.certFileName }}
+            - --backend-client-key-file={{ include "apiservice-audit-proxy.paths.backendClient" . }}/{{ $requestheaderClientCert.keyFileName }}
             {{- end }}
             - --backend-identity-mode={{ $identityMode }}
             {{- if eq $identityMode "impersonation" }}
@@ -112,7 +110,7 @@ spec:
             {{- end }}
           ports:
             - name: api
-              containerPort: {{ .Values.containerPort }}
+              containerPort: {{ .Values.server.containerPort }}
               protocol: TCP
           livenessProbe:
             httpGet:
@@ -139,12 +137,12 @@ spec:
             - name: serving-tls
               mountPath: {{ include "apiservice-audit-proxy.paths.tls" . }}
               readOnly: true
-            {{- if .Values.backend.caSecretName }}
+            {{- if .Values.backend.tls.caSecretName }}
             - name: backend-ca
               mountPath: {{ include "apiservice-audit-proxy.paths.backendCA" . }}
               readOnly: true
             {{- end }}
-            {{- if .Values.backend.clientCertSecretName }}
+            {{- if and (eq $identityMode "requestheader") $requestheaderClientCert.secretName }}
             - name: backend-client
               mountPath: {{ include "apiservice-audit-proxy.paths.backendClient" . }}
               readOnly: true
@@ -161,15 +159,15 @@ spec:
         - name: serving-tls
           secret:
             secretName: {{ include "apiservice-audit-proxy.servingSecretName" . }}
-        {{- if .Values.backend.caSecretName }}
+        {{- if .Values.backend.tls.caSecretName }}
         - name: backend-ca
           secret:
-            secretName: {{ .Values.backend.caSecretName }}
+            secretName: {{ .Values.backend.tls.caSecretName }}
         {{- end }}
-        {{- if .Values.backend.clientCertSecretName }}
+        {{- if and (eq $identityMode "requestheader") $requestheaderClientCert.secretName }}
         - name: backend-client
           secret:
-            secretName: {{ .Values.backend.clientCertSecretName }}
+            secretName: {{ $requestheaderClientCert.secretName }}
         {{- end }}
         {{- with .Values.volumes }}
         {{- toYaml . | nindent 8 }}
