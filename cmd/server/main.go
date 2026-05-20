@@ -141,6 +141,11 @@ func main() {
 		logger.Error("unable to initialize webhook client", "error", err)
 		os.Exit(1)
 	}
+	logger.Info("audit webhook client configured",
+		"endpoint", webhookEndpointString(webhookClient),
+		"timeout", cfg.webhookTimeout,
+		"kubeconfig", cfg.webhookKubeconfig,
+	)
 
 	handler, err := auditproxy.NewHandler(auditproxy.HandlerConfig{
 		BackendURL:        backendURL,
@@ -171,29 +176,7 @@ func main() {
 	}
 	server.TLSConfig = buildServingTLSConfig(cfg)
 
-	logger.Info(
-		"starting audit pass-through API server prototype",
-		"listen_address", cfg.listenAddress,
-		"backend_url", backendURL.String(),
-		"backend_insecure_skip_verify", cfg.backendInsecureSkipVerify,
-		"backend_ca_file", cfg.backendCAFile,
-		"backend_client_cert_file", cfg.backendClientCertFile,
-		"backend_client_key_file", cfg.backendClientKeyFile,
-		"backend_server_name", cfg.backendServerName,
-		"requestheader_trust_source", fmt.Sprintf("%s/%s",
-			identity.AuthenticationConfigMapNamespace, identity.AuthenticationConfigMapName),
-		"backend_identity_mode", cfg.backendIdentityMode,
-		"backend_impersonation_token_file", cfg.backendImpersonationTokenFile,
-		"backend_impersonation_extra_keys", cfg.backendImpersonationExtraKeys,
-		"backend_impersonation_forward_all_extras", cfg.backendImpersonationForwardAllExtras,
-		"backend_impersonation_forward_uid", cfg.backendImpersonationForwardUID,
-		"webhook_kubeconfig", cfg.webhookKubeconfig,
-		"max_audit_body_bytes", cfg.maxAuditBodyBytes,
-		"capture_temp_dir", cfg.captureTempDir,
-		"tls_enabled", cfg.tlsCertFile != "",
-		"tls_cert_file", cfg.tlsCertFile,
-		"tls_private_key_file", cfg.tlsPrivateKeyFile,
-	)
+	logStartupAssumptions(logger, cfg, backendURL)
 
 	go func() {
 		<-ctx.Done()
@@ -206,10 +189,81 @@ func main() {
 		}
 	}()
 
+	logger.Info("audit pass-through API server listening; waiting for first request from the cluster",
+		"address", cfg.listenAddress,
+		"tls_enabled", cfg.tlsCertFile != "",
+	)
 	if err := serve(server, cfg); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("server exited with error", "error", err)
 		os.Exit(1)
 	}
+}
+
+// logStartupAssumptions writes one log line per subsystem so an operator can
+// see, in order, exactly what choices the proxy made. Insecure or wide-open
+// settings are promoted to Warn so they are not lost in the Info noise. Each
+// line is one-shot — there is no per-request logging.
+func logStartupAssumptions(logger *slog.Logger, cfg config, backendURL *url.URL) {
+	logger.Info("backend wiring",
+		"backend_url", backendURL.String(),
+		"backend_identity_mode", cfg.backendIdentityMode,
+		"backend_ca_file", cfg.backendCAFile,
+		"backend_server_name", cfg.backendServerName,
+	)
+	if cfg.backendInsecureSkipVerify {
+		logger.Warn("backend TLS verification is disabled (--backend-insecure-skip-verify); " +
+			"backend identity is not authenticated — only acceptable for prototype clusters")
+	}
+
+	switch cfg.backendIdentityMode {
+	case backendIdentityModeImpersonation:
+		logger.Info("backend identity: impersonation",
+			"token_file", cfg.backendImpersonationTokenFile,
+			"forward_uid", cfg.backendImpersonationForwardUID,
+			"forward_all_extras", cfg.backendImpersonationForwardAllExtras,
+			"extra_keys_allowlist", cfg.backendImpersonationExtraKeys,
+		)
+		if cfg.backendImpersonationForwardAllExtras {
+			logger.Warn("impersonation forwards ALL inbound extras to the backend " +
+				"(--backend-impersonation-forward-all-extras); any caller-supplied extra key reaches the backend")
+		}
+	case backendIdentityModeRequestHeader:
+		logger.Info("backend identity: requestheader (forwarding inbound X-Remote-* headers unchanged)")
+	}
+
+	logger.Info("inbound trust source",
+		"configmap", fmt.Sprintf("%s/%s",
+			identity.AuthenticationConfigMapNamespace, identity.AuthenticationConfigMapName),
+	)
+
+	logger.Info("audit capture",
+		"max_audit_body_bytes", cfg.maxAuditBodyBytes,
+		"capture_temp_dir", cfg.captureTempDir,
+	)
+
+	if cfg.tlsCertFile == "" {
+		logger.Warn("serving plain HTTP (no --tls-cert-file); " +
+			"requestheader identity is meaningless without TLS — only acceptable for local debugging")
+	} else {
+		logger.Info("serving TLS",
+			"cert_file", cfg.tlsCertFile,
+			"private_key_file", cfg.tlsPrivateKeyFile,
+		)
+	}
+}
+
+// webhookEndpointString returns the configured webhook destination as a string
+// for startup logging. Returns "<unknown>" when the client did not expose an
+// endpoint (e.g. test doubles).
+func webhookEndpointString(client *webhook.Client) string {
+	if client == nil {
+		return "<unknown>"
+	}
+	endpoint := client.Endpoint()
+	if endpoint == nil {
+		return "<unknown>"
+	}
+	return endpoint.String()
 }
 
 func parseFlags(args []string, stderr io.Writer) (config, error) {
@@ -468,6 +522,10 @@ func startRequestHeaderTrust(
 	// RoleBinding (Forbidden) versus an absent ConfigMap (NotFound).
 	configMapRef := fmt.Sprintf("%s/%s",
 		identity.AuthenticationConfigMapNamespace, identity.AuthenticationConfigMapName)
+	logger.Info("loading requestheader trust from cluster ConfigMap",
+		"configmap", configMapRef,
+		"timeout", requestHeaderTrustStartupTimeout,
+	)
 	_, err := client.CoreV1().ConfigMaps(identity.AuthenticationConfigMapNamespace).
 		Get(startupCtx, identity.AuthenticationConfigMapName, metav1.GetOptions{})
 	switch {
