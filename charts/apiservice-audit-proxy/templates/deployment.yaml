@@ -30,6 +30,16 @@
 {{- fail "backend.identity.impersonation.extras.keys must be set when backend.identity.impersonation.extras.mode=allowlist" }}
 {{- end }}
 {{- end }}
+{{- $metricsListenerEnabled := and .Values.metrics.listenAddress (ne (toString .Values.metrics.listenAddress) "0") -}}
+{{- if and .Values.metrics.serviceMonitor.enabled (not $metricsListenerEnabled) }}
+{{- fail "metrics.serviceMonitor.enabled requires the metrics listener (metrics.listenAddress must not be \"0\")" }}
+{{- end }}
+{{- if and .Values.metrics.vmServiceScrape.enabled (not $metricsListenerEnabled) }}
+{{- fail "metrics.vmServiceScrape.enabled requires the metrics listener (metrics.listenAddress must not be \"0\")" }}
+{{- end }}
+{{- if and .Values.metrics.tls.enabled (not .Values.metrics.tls.secretName) }}
+{{- fail "metrics.tls.enabled requires metrics.tls.secretName to point at a Secret with tls.crt and tls.key" }}
+{{- end }}
 {{- $requestheaderClientCert := .Values.backend.identity.requestheader.clientCert -}}
 apiVersion: apps/v1
 kind: Deployment

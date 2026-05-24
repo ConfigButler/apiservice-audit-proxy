@@ -410,6 +410,15 @@ func (h *Handler) observePassthroughResponse(resp *http.Response) {
 	state.SetBackend(resp.Proto, streaming)
 	state.recordBackendRoundTrip(resp.Request.Context(), outcomeOK)
 
+	// 101 Switching Protocols responses hand control of the connection to
+	// httputil.ReverseProxy, which requires resp.Body to remain an
+	// io.ReadWriteCloser so it can pump bytes in both directions across the
+	// upgraded conn. Wrapping it in an observed ReadCloser would drop the
+	// Writer half and turn every upgrade into a 502.
+	if resp.StatusCode == http.StatusSwitchingProtocols {
+		return
+	}
+
 	resp.Body = observeReadCloser(resp.Body, func(n int64) {
 		telemetry.AddTransportBytes(resp.Request.Context(), telemetry.TransportByteLabels{
 			Leg:       transportLegBackend,
@@ -633,6 +642,14 @@ func (w *metricResponseWriter) Flush() {
 	}
 }
 
+// Unwrap lets http.ResponseController reach optional interfaces such as
+// http.Hijacker on the underlying writer. httputil.ReverseProxy uses that path
+// when handling 101 Switching Protocols, so without Unwrap a wrapped writer
+// turns every upgrade attempt into a 502.
+func (w *metricResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
 func (w *metricResponseWriter) StatusCode() int {
 	return w.statusCode
 }
@@ -712,11 +729,28 @@ func isWatchRequest(r *http.Request) bool {
 	return r != nil && strings.EqualFold(r.URL.Query().Get("watch"), "true")
 }
 
+// isStreamingResponse classifies a response as a Kubernetes-style stream.
+// It deliberately does not key off ContentLength == -1: an unknown body length
+// is a transport fact (any chunked response qualifies), not a semantic stream.
+// We only consider the response a stream when the backend signals a watch via
+// the documented Content-Type marker.
 func isStreamingResponse(resp *http.Response) bool {
 	if resp == nil {
 		return false
 	}
-	return resp.ContentLength == -1
+	return contentTypeIsWatchStream(resp.Header.Get("Content-Type"))
+}
+
+func contentTypeIsWatchStream(contentType string) bool {
+	if contentType == "" {
+		return false
+	}
+	for _, part := range strings.Split(contentType, ";") {
+		if strings.EqualFold(strings.TrimSpace(part), "stream=watch") {
+			return true
+		}
+	}
+	return false
 }
 
 func copyHeaders(dst, src http.Header) {

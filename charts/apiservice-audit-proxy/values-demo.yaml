@@ -3,10 +3,9 @@
 # - apiservice-audit-proxy fronting that backend
 # - webhook-tester (the demo audit receiver) at audit.testWebhookReceiver
 #
-# This demo pins backend.identity.mode=requestheader: it uses backend mTLS
-# client cert auth (the testApiserver path that's already wired up here). The
-# default chart value is impersonation, which is exercised by the dedicated
-# impersonation e2e values (test/e2e/values/proxy-impersonation.yaml).
+# This demo uses the chart's default backend identity posture: impersonation.
+# The proxy calls the Wardle backend as its ServiceAccount and translates the
+# verified front-proxy user into Kubernetes Impersonate-* headers.
 
 server:
   apiService:
@@ -22,19 +21,14 @@ backend:
     insecureSkipVerify: true
 
   identity:
-    mode: requestheader
-    requestheader:
-      clientCert:
-        secretName: audit-pass-through-backend-client-cert
+    mode: impersonation
+    impersonation:
+      rbac:
+        create: true
 
   testApiserver:
     enabled: true
     nameOverride: api-backend
-    backendClientCert:
-      selfSignedIssuerName: audit-pass-through-backend-selfsigned
-      caSecretName: audit-pass-through-backend-client-ca
-      caIssuerName: audit-pass-through-backend-client-ca-issuer
-      clientSecretName: audit-pass-through-backend-client-cert
 
 audit:
   testWebhookReceiver:

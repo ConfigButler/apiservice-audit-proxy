@@ -10,9 +10,11 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -800,6 +802,180 @@ func TestHandler_AuditedPath_ForwardsRequestFaithfully(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for backend body")
 	}
+}
+
+func TestHandler_ChunkedListResponse_DoesNotRecordStreamMetrics(t *testing.T) {
+	reader, err := telemetry.InitTestExporter()
+	require.NoError(t, err)
+
+	// Backend returns an ordinary list with no Content-Length and a single
+	// flush. From the wire that is just chunked transfer encoding — it is not
+	// a Kubernetes watch and should not be metered as one.
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"kind":"FlunderList","apiVersion":"wardle.example.com/v1alpha1","items":[]}`))
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+	}))
+	defer backend.Close()
+
+	backendURL, err := url.Parse(backend.URL)
+	require.NoError(t, err)
+
+	handler, err := NewHandler(HandlerConfig{
+		BackendURL:        backendURL,
+		WebhookClient:     &fakeWebhookClient{delivered: make(chan auditv1.EventList, 1)},
+		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		MaxAuditBodyBytes: 4096,
+	})
+	require.NoError(t, err)
+
+	proxy := httptest.NewServer(handler)
+	defer proxy.Close()
+
+	req, err := http.NewRequest(
+		http.MethodGet,
+		proxy.URL+"/apis/wardle.example.com/v1alpha1/namespaces/default/flunders",
+		nil,
+	)
+	require.NoError(t, err)
+	req.Header.Set("X-Remote-User", "alice")
+
+	resp, err := proxy.Client().Do(req)
+	require.NoError(t, err)
+	_, err = io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+
+	listLabels := map[string]string{
+		"verb":      "list",
+		"resource":  "flunders",
+		"streaming": "false",
+	}
+	requests, ok := telemetry.CollectInt64Sum(reader,
+		"apiservice_audit_proxy_requests_total", listLabels)
+	require.True(t, ok, "expected a non-streaming list request counter sample")
+	assert.Equal(t, int64(1), requests)
+
+	streamingRequests, ok := telemetry.CollectInt64Sum(reader,
+		"apiservice_audit_proxy_requests_total", map[string]string{
+			"verb":      "list",
+			"resource":  "flunders",
+			"streaming": "true",
+		})
+	assert.False(t, ok,
+		"chunked list response must not be classified as streaming, got streaming counter=%d",
+		streamingRequests)
+
+	_, ok = telemetry.CollectInt64Sum(reader, "apiservice_audit_proxy_streams_active", map[string]string{
+		"kind": "watch",
+	})
+	assert.False(t, ok, "chunked list response must not increment streams_active{kind=watch}")
+
+	_, ok = telemetry.CollectHistogramCount(reader,
+		"apiservice_audit_proxy_stream_duration_seconds",
+		map[string]string{"kind": "watch"})
+	assert.False(t, ok, "chunked list response must not record stream_duration_seconds samples")
+}
+
+func TestMetricResponseWriter_UnwrapsUnderlyingWriter(t *testing.T) {
+	t.Parallel()
+
+	underlying := httptest.NewRecorder()
+	state := newRequestMetricState(httptest.NewRequest(http.MethodGet, "/", nil))
+	wrapped := newMetricResponseWriter(context.Background(), underlying, state)
+
+	unwrapper, ok := any(wrapped).(interface {
+		Unwrap() http.ResponseWriter
+	})
+	require.True(t, ok,
+		"metricResponseWriter must implement Unwrap so http.ResponseController "+
+			"can reach optional interfaces (Hijacker etc.)")
+	assert.Same(t, underlying, unwrapper.Unwrap())
+}
+
+func TestHandler_PassthroughUpgradeRequest(t *testing.T) {
+	t.Parallel()
+
+	const upgradedPayload = "upgraded\n"
+
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.EqualFold(r.Header.Get("Connection"), "upgrade") {
+			t.Errorf("backend expected Connection: upgrade, got %q", r.Header.Get("Connection"))
+		}
+		if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+			t.Errorf("backend expected Upgrade: websocket, got %q", r.Header.Get("Upgrade"))
+		}
+
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			t.Errorf("backend ResponseWriter must support hijacking")
+			return
+		}
+		conn, bufrw, err := hijacker.Hijack()
+		if err != nil {
+			t.Errorf("backend hijack failed: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close() }()
+
+		_, _ = bufrw.WriteString(
+			"HTTP/1.1 101 Switching Protocols\r\n" +
+				"Upgrade: websocket\r\n" +
+				"Connection: Upgrade\r\n" +
+				"\r\n",
+		)
+		_, _ = bufrw.WriteString(upgradedPayload)
+		_ = bufrw.Flush()
+	}))
+	defer backend.Close()
+
+	backendURL, err := url.Parse(backend.URL)
+	require.NoError(t, err)
+
+	handler, err := NewHandler(HandlerConfig{
+		BackendURL:        backendURL,
+		WebhookClient:     &fakeWebhookClient{},
+		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		MaxAuditBodyBytes: 4096,
+	})
+	require.NoError(t, err)
+
+	proxy := httptest.NewServer(handler)
+	defer proxy.Close()
+
+	proxyAddr := strings.TrimPrefix(proxy.URL, "http://")
+	conn, err := net.Dial("tcp", proxyAddr)
+	require.NoError(t, err)
+	defer func() { _ = conn.Close() }()
+
+	// Use a non-audited resource verb (GET / list) so the request takes the
+	// passthrough path through httputil.ReverseProxy, where upgrade handling
+	// lives.
+	rawRequest := fmt.Sprintf(
+		"GET /apis/wardle.example.com/v1alpha1/namespaces/default/flunders HTTP/1.1\r\n"+
+			"Host: %s\r\n"+
+			"Connection: Upgrade\r\n"+
+			"Upgrade: websocket\r\n"+
+			"X-Remote-User: alice\r\n"+
+			"\r\n",
+		proxyAddr,
+	)
+	_, err = conn.Write([]byte(rawRequest))
+	require.NoError(t, err)
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	buf := make([]byte, 4096)
+	n, err := conn.Read(buf)
+	require.NoError(t, err)
+	got := string(buf[:n])
+
+	assert.True(t, strings.HasPrefix(got, "HTTP/1.1 101 Switching Protocols"),
+		"expected 101 Switching Protocols, got: %q", got)
+	assert.NotContains(t, got, "502 Bad Gateway",
+		"upgrade must not be downgraded to 502 by the metrics-wrapper hijack gap")
 }
 
 type fakeWebhookClient struct {

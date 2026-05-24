@@ -109,6 +109,60 @@ directly — that is ordinary Kubernetes impersonation and needs no proxy. This
 proxy's value is auditing the aggregation hop, and it delivers that without
 becoming a general-purpose identity endpoint.
 
+## Pass-through Invariants
+
+A transparent forwarder for an aggregated Kubernetes API has a small set of
+HTTP-level rules that must hold or it stops being transparent. Each invariant
+below lists where it is enforced and the test that would surface a regression.
+
+1. **HTTP upgrade requests reach the backend unchanged.** Any wrapper around
+   `http.ResponseWriter` must expose `Unwrap()` so `http.ResponseController`
+   can find `http.Hijacker`, and the response body on `101 Switching
+   Protocols` must remain an `io.ReadWriteCloser` (not re-wrapped as a
+   `ReadCloser`-only observer). Without both, websocket/SPDY connections
+   collapse to `502 Bad Gateway`. Enforced in
+   [pkg/proxy/handler.go](../pkg/proxy/handler.go) by
+   `metricResponseWriter.Unwrap` and the 101 short-circuit in
+   `observePassthroughResponse`. Guarded by
+   `TestMetricResponseWriter_UnwrapsUnderlyingWriter` and
+   `TestHandler_PassthroughUpgradeRequest`.
+
+2. **Stream classification is semantic, not transport-shaped.** A response is
+   "streaming" only when the Kubernetes marker `Content-Type: …;stream=watch`
+   is present (or the request URL carries `watch=true`). Unknown
+   `Content-Length` is just chunked transfer encoding — treating it as a
+   stream pollutes `streams_active`, `stream_duration_seconds`, and the
+   `streaming` label on every chunked list response. Enforced by
+   `contentTypeIsWatchStream` in
+   [pkg/proxy/handler.go](../pkg/proxy/handler.go). Guarded by
+   `TestHandler_ChunkedListResponse_DoesNotRecordStreamMetrics` and on the
+   wire by `TestProxyMetricsScrapeAfterWatch`.
+
+3. **No whole-request server deadlines.** `http.Server.ReadHeaderTimeout` is
+   the only server-level slow-client guard. `ReadTimeout` and `WriteTimeout`
+   apply to the entire request/response and tear watches down at a fixed
+   interval — that bug surfaced as `INTERNAL_ERROR` / `stream error` /
+   `unexpected EOF` against long-lived watches. This is acceptable because
+   the trusted caller is the kube-apiserver aggregator; if the proxy is ever
+   exposed more broadly, add an explicit non-streaming timeout knob rather
+   than re-enabling the whole-request deadlines. Enforced in `newHTTPServer`
+   in [cmd/server/main.go](../cmd/server/main.go). Guarded by
+   `TestNewHTTPServer_UsesStreamingSafeTimeouts` and on the wire by
+   `TestWatchStaysOpenThroughProxy`.
+
+4. **Response flushes pass through immediately.**
+   `httputil.ReverseProxy.FlushInterval = -1` so a backend `Flush()` reaches
+   the client without buffering. Watches batch their own events; the proxy
+   must not add latency on top. Set where the `ReverseProxy` is constructed
+   in [pkg/proxy/handler.go](../pkg/proxy/handler.go).
+
+5. **The chart refuses footgun configs at render time.** Scraper resources
+   (`ServiceMonitor`, `VMServiceScrape`) and metrics TLS only make sense when
+   the metrics listener is enabled and a TLS secret is provided. The chart
+   `fail`s with a clear message rather than rendering an unusable resource.
+   Enforced by the guards near the top of
+   [charts/apiservice-audit-proxy/templates/deployment.yaml](../charts/apiservice-audit-proxy/templates/deployment.yaml).
+
 ## Request Flow
 
 1. A client sends a mutating request for an aggregated resource to

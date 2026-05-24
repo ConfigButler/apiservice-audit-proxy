@@ -631,6 +631,17 @@ func waitForTrust(ctx context.Context, controller *identity.RequestHeaderTrustCo
 	}
 }
 
+// newHTTPServer wires the listener with deadlines that survive long-lived
+// Kubernetes watch streams.
+//
+// Tradeoff: ReadHeaderTimeout is intentionally the only server-level
+// slow-client guard. We do not set ReadTimeout or WriteTimeout because those
+// apply to the whole request/response and would tear down watches at a fixed
+// interval (the bug PR #8 fixed). The trusted caller in production is the
+// kube-apiserver aggregator, so unbounded request bodies and slow readers are
+// not a meaningful risk surface. If this proxy is ever exposed beyond
+// kube-apiserver, add an explicit non-streaming timeout knob rather than
+// re-enabling the whole-request deadlines.
 func newHTTPServer(addr string, handler http.Handler, tlsConfig *tls.Config) (*http.Server, error) {
 	server := &http.Server{
 		Addr:              addr,

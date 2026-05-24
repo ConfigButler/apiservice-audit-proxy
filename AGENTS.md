@@ -221,7 +221,7 @@ alone. Do not edit files inside `external-resources/` from this repository (unle
 | File | Purpose |
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Component diagram, request flow, trust model |
-| [docs/E2E_SETUP_LESSONS.md](docs/E2E_SETUP_LESSONS.md) | Detailed write-up of every e2e issue ever encountered and why |
+| [docs/E2E_TESTS.md](docs/E2E_TESTS.md) | E2E suite summary: what each test proves, coverage strength, and known gaps |
 | [test/e2e/cluster/README.md](test/e2e/cluster/README.md) | inotify limits and two-cluster DooD behaviour |
 | [Taskfile.yml](Taskfile.yml) | All non-e2e tasks |
 | [Taskfile.e2e.yml](Taskfile.e2e.yml) | All e2e tasks and variables |

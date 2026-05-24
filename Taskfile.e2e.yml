@@ -123,6 +123,13 @@ tasks:
     cmds:
       - "CTX={{.CTX}} WEBHOOK_TESTER_BASE_URL={{.WEBHOOK_TESTER_BASE_URL}} go test -tags=e2e -run 'TestWatchStaysOpenThroughProxy' -count=1 -v ./test/e2e"
 
+  e2e:test-metrics-scrape:
+    desc: Prove /metrics is scrapeable in-cluster and Kubernetes-aware stream classification is correct (list=false, watch=true)
+    deps:
+      - e2e:_proxy-with-webhook-tester-installed
+    cmds:
+      - "CTX={{.CTX}} E2E_PROXY_NAMESPACE={{.E2E_PROXY_NAMESPACE}} E2E_RELEASE_NAME={{.E2E_RELEASE_NAME}} go test -tags=e2e -run 'TestProxyMetricsScrapeAfterWatch' -count=1 -v ./test/e2e"
+
   e2e:test-impersonation:
     desc: |
       Run the impersonation-mode scenarios (audited write, non-audited
@@ -168,6 +175,21 @@ tasks:
     cmds:
       - task: e2e:test-smoke
       - task: e2e:test-image-refresh
+
+  e2e:test-all:
+    desc: |
+      Run every e2e suite this repository ships, in the order CI expects.
+      One target so CI can call a single command; if you want a faster local
+      iteration, invoke a sub-target directly (e.g. e2e:test-watch-streams).
+    cmds:
+      - task: e2e:test-smoke-full
+      - task: e2e:test-watch-streams
+      - task: e2e:test-metrics-scrape
+      - task: e2e:test-smoke-backend-ca
+      - task: e2e:test-audit-gap
+      - task: e2e:test-requestheader-trust
+      - task: e2e:test-impersonation
+      - task: e2e:test-impersonation-no-rbac
 
   e2e:deploy-with-webhook-tester:
     desc: Deploy the Helm-managed sample backend, proxy, and webhook-tester

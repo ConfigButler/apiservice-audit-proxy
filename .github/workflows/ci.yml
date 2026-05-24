@@ -298,13 +298,7 @@ jobs:
             bash -lc "
               set -euo pipefail
               git config --global --add safe.directory ${{ env.CI_WORKDIR }}
-              task e2e:test-smoke-full
-              task e2e:test-watch-streams
-              task e2e:test-smoke-backend-ca
-              task e2e:test-audit-gap
-              task e2e:test-requestheader-trust
-              task e2e:test-impersonation
-              task e2e:test-impersonation-no-rbac
+              task e2e:test-all
             "
 
       - name: Collect diagnostics on failure

@@ -155,5 +155,5 @@ best-effort: webhook delivery does not fail the proxied API request.
 - [Connections and TLS](docs/CONNECTIONS_AND_TLS.md)
 - [Helm values guide](docs/HELM_VALUES.md)
 - [Why this exists](docs/WHY.md)
-- [E2E setup notes](docs/E2E_SETUP_LESSONS.md)
+- [E2E test suite summary](docs/E2E_TESTS.md)
 - [Helm chart values](charts/apiservice-audit-proxy/values.yaml)

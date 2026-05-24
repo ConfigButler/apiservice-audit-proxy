@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(gofmt -w pkg/identity/cluster.go)",
-      "Bash(gofmt -l cmd/ pkg/ test/)",
-      "Bash(golangci-lint run *)"
-    ]
-  }
-}
