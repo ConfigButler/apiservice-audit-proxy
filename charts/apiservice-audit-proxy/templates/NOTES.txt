@@ -6,10 +6,11 @@
    - `cert-manager`: let cert-manager issue the serving cert and inject the CA into the `APIService`
 4. If the backend requires custom trust or mTLS, set `backend.tls.caSecretName` and/or, in requestheader mode, `backend.identity.requestheader.clientCert.secretName`.
 5. If you enable `server.apiService.enabled` with `server.tls.mode=existing-secret`, set either `server.apiService.caBundle` or `server.apiService.insecureSkipTLSVerify=true`.
-6. Metrics are served over plain HTTP on the `metrics` Service port when
-   `server.metrics.listenAddress` is not `0`. Enable either
-   `monitoring.serviceMonitor.enabled` or `monitoring.vmServiceScrape.enabled`
-   to render scraper resources.
+6. Metrics are served on the `metrics` Service port when
+   `metrics.listenAddress` is not `0`. Plain HTTP by default; set
+   `metrics.tls.enabled=true` with `metrics.tls.secretName` to serve over
+   HTTPS. Enable either `metrics.serviceMonitor.enabled` or
+   `metrics.vmServiceScrape.enabled` to render scraper resources.
 
 Example:
 

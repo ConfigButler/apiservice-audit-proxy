@@ -64,6 +64,8 @@ const (
 type config struct {
 	listenAddress                        string
 	metricsListenAddress                 string
+	metricsTLSCertFile                   string
+	metricsTLSPrivateKeyFile             string
 	backendURL                           string
 	backendInsecureSkipVerify            bool
 	backendCAFile                        string
@@ -168,8 +170,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	metricsShutdown, err := telemetry.InitPrometheusExporter(ctx, nil)
-	if err != nil {
+	if err := telemetry.InitPrometheusExporter(); err != nil {
 		logger.Error("unable to initialize metrics exporter", "error", err)
 		os.Exit(1)
 	}
@@ -185,8 +186,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	metricsServer := newMetricsServer(cfg.metricsListenAddress)
-
 	logStartupAssumptions(logger, cfg, backendURL)
 
 	go func() {
@@ -198,23 +197,10 @@ func main() {
 		if err := server.Shutdown(shutdownCtx); err != nil {
 			logger.Error("graceful shutdown failed", "error", err)
 		}
-		if metricsServer != nil {
-			if err := metricsServer.Shutdown(shutdownCtx); err != nil {
-				logger.Error("metrics server shutdown failed", "error", err)
-			}
-		}
-		if err := metricsShutdown(shutdownCtx); err != nil {
-			logger.Error("metrics shutdown failed", "error", err)
-		}
 	}()
 
-	if metricsServer != nil {
-		go func() {
-			logger.Info("metrics server listening", "address", cfg.metricsListenAddress)
-			if err := metricsServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				logger.Error("metrics server exited with error", "error", err)
-			}
-		}()
+	if cfg.metricsListenAddress != "" && cfg.metricsListenAddress != "0" {
+		go runMetricsServer(logger, cfg)
 	}
 
 	logger.Info("audit pass-through API server listening; waiting for first request from the cluster",
@@ -279,9 +265,17 @@ func logStartupAssumptions(logger *slog.Logger, cfg config, backendURL *url.URL)
 		)
 	}
 
-	if cfg.metricsListenAddress == "" || cfg.metricsListenAddress == "0" {
+	switch {
+	case cfg.metricsListenAddress == "" || cfg.metricsListenAddress == "0":
 		logger.Info("metrics server disabled")
-	} else {
+	case cfg.metricsTLSCertFile != "":
+		logger.Info("serving metrics over HTTPS",
+			"address", cfg.metricsListenAddress,
+			"path", "/metrics",
+			"cert_file", cfg.metricsTLSCertFile,
+			"private_key_file", cfg.metricsTLSPrivateKeyFile,
+		)
+	default:
 		logger.Info("serving metrics over plain HTTP",
 			"address", cfg.metricsListenAddress,
 			"path", "/metrics",
@@ -313,7 +307,19 @@ func parseFlags(args []string, stderr io.Writer) (config, error) {
 		&cfg.metricsListenAddress,
 		"metrics-listen-address",
 		defaultMetricsAddress,
-		"Address for the plain HTTP metrics server. Set to 0 or empty to disable.",
+		"Address for the metrics server. Set to 0 or empty to disable.",
+	)
+	fs.StringVar(
+		&cfg.metricsTLSCertFile,
+		"metrics-tls-cert-file",
+		"",
+		"Serving certificate file for HTTPS metrics. Both metrics TLS flags must be set together to enable HTTPS.",
+	)
+	fs.StringVar(
+		&cfg.metricsTLSPrivateKeyFile,
+		"metrics-tls-private-key-file",
+		"",
+		"Serving private key file for HTTPS metrics. Both metrics TLS flags must be set together to enable HTTPS.",
 	)
 	fs.StringVar(&cfg.backendURL, "backend-url", "", "URL of the real aggregated backend.")
 	fs.BoolVar(
@@ -422,6 +428,10 @@ func parseFlags(args []string, stderr io.Writer) (config, error) {
 		return config{}, errors.New("--max-audit-body-bytes must be greater than zero")
 	}
 	if err := validateServingTLSFlags(cfg); err != nil {
+		fs.Usage()
+		return config{}, err
+	}
+	if err := validateMetricsTLSFlags(cfg); err != nil {
 		fs.Usage()
 		return config{}, err
 	}
@@ -639,23 +649,6 @@ func newHTTPServer(addr string, handler http.Handler, tlsConfig *tls.Config) (*h
 	return server, nil
 }
 
-func newMetricsServer(addr string) *http.Server {
-	if addr == "" || addr == "0" {
-		return nil
-	}
-
-	mux := http.NewServeMux()
-	mux.Handle("/metrics", promhttp.Handler())
-
-	return &http.Server{
-		Addr:              addr,
-		Handler:           mux,
-		ReadHeaderTimeout: defaultReadHeaderTimeout,
-		IdleTimeout:       defaultIdleTimeout,
-		ConnState:         newConnStateTracker(),
-	}
-}
-
 type connStateTracker struct {
 	mu     sync.Mutex
 	states map[net.Conn]http.ConnState
@@ -698,6 +691,45 @@ func validateServingTLSFlags(cfg config) error {
 	}
 
 	return errors.New("--tls-cert-file and --tls-private-key-file must be provided together")
+}
+
+// runMetricsServer runs the dedicated metrics listener. It is intentionally
+// minimal: no ConnState tracker (so Prometheus scrape sockets do not inflate
+// the APIService connections_active gauge), no extra timeouts beyond Go's
+// defaults, and no graceful-shutdown plumbing — Prometheus retries scrapes
+// that race a process exit. See docs/WATCHES_AND_STREAMS.md §4.
+func runMetricsServer(logger *slog.Logger, cfg config) {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+
+	logger.Info("metrics server listening",
+		"address", cfg.metricsListenAddress,
+		"tls_enabled", cfg.metricsTLSCertFile != "",
+	)
+
+	var err error
+	switch {
+	case cfg.metricsTLSCertFile != "":
+		err = http.ListenAndServeTLS( //nolint:gosec // dedicated metrics listener; timeouts intentionally left at Go defaults per §4.
+			cfg.metricsListenAddress,
+			cfg.metricsTLSCertFile,
+			cfg.metricsTLSPrivateKeyFile,
+			mux,
+		)
+	default:
+		err = http.ListenAndServe(cfg.metricsListenAddress, mux) //nolint:gosec // dedicated metrics listener; see §4.
+	}
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		logger.Error("metrics server exited with error", "error", err)
+	}
+}
+
+func validateMetricsTLSFlags(cfg config) error {
+	if (cfg.metricsTLSCertFile != "") == (cfg.metricsTLSPrivateKeyFile != "") {
+		return nil
+	}
+
+	return errors.New("--metrics-tls-cert-file and --metrics-tls-private-key-file must be provided together")
 }
 
 // buildServingTLSConfig configures the inbound serving TLS.

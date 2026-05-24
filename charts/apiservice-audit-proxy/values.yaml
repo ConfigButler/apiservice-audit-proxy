@@ -65,14 +65,6 @@ server:
   listenAddress: ":9445"
   containerPort: 9445
 
-  metrics:
-    # Plain HTTP metrics endpoint. Set listenAddress to "0" to disable the
-    # metrics server entirely.
-    listenAddress: ":8080"
-    containerPort: 8080
-    service:
-      port: 8080
-
   # APIService registration that makes kube-apiserver route aggregated API
   # traffic to this proxy.
   apiService:
@@ -306,9 +298,29 @@ audit:
       runAsGroup: 10001
 
 # ============================================================================
-# Monitoring
+# Metrics
 # ============================================================================
-monitoring:
+# Dedicated metrics listener, scraper resources, and optional TLS for the
+# /metrics endpoint. Plain HTTP by default; on a dedicated metrics port that is
+# usually fine. Enable tls.enabled when cluster policy requires authenticated
+# or encrypted scrapes.
+metrics:
+  # Address the metrics server listens on inside the pod, and the matching
+  # containerPort and Service port. Set listenAddress to "0" to disable the
+  # listener, the container port, and the Service port together.
+  listenAddress: ":8080"
+  containerPort: 8080
+  service:
+    port: 8080
+
+  # Optional TLS for the metrics endpoint.
+  tls:
+    enabled: false
+    # Existing Secret in the release namespace containing tls.crt and tls.key.
+    # Required when tls.enabled is true.
+    secretName: ""
+
+  # Prometheus Operator ServiceMonitor.
   serviceMonitor:
     enabled: false
     namespace: ""
@@ -317,8 +329,13 @@ monitoring:
     scrapeTimeout: 10s
     path: /metrics
     port: metrics
+    # Must match the effective metrics transport:
+    # - https when metrics.tls.enabled=true
+    # - http  when metrics.tls.enabled=false
     scheme: http
+    tlsConfig: {}
 
+  # VictoriaMetrics Operator VMServiceScrape.
   vmServiceScrape:
     enabled: false
     namespace: ""
@@ -327,6 +344,7 @@ monitoring:
     path: /metrics
     port: metrics
     scheme: http
+    tlsConfig: {}
 
 # Compute resources for the proxy container.
 resources: {}

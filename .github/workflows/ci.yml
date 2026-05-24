@@ -299,6 +299,7 @@ jobs:
               set -euo pipefail
               git config --global --add safe.directory ${{ env.CI_WORKDIR }}
               task e2e:test-smoke-full
+              task e2e:test-watch-streams
               task e2e:test-smoke-backend-ca
               task e2e:test-audit-gap
               task e2e:test-requestheader-trust

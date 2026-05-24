@@ -1,12 +1,12 @@
-{{- if .Values.monitoring.vmServiceScrape.enabled }}
+{{- if .Values.metrics.vmServiceScrape.enabled }}
 apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMServiceScrape
 metadata:
   name: {{ include "apiservice-audit-proxy.fullname" . }}
-  namespace: {{ .Values.monitoring.vmServiceScrape.namespace | default .Release.Namespace }}
+  namespace: {{ .Values.metrics.vmServiceScrape.namespace | default .Release.Namespace }}
   labels:
     {{- include "apiservice-audit-proxy.labels" . | nindent 4 }}
-    {{- with .Values.monitoring.vmServiceScrape.labels }}
+    {{- with .Values.metrics.vmServiceScrape.labels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
 spec:
@@ -14,8 +14,12 @@ spec:
     matchLabels:
       {{- include "apiservice-audit-proxy.selectorLabels" . | nindent 6 }}
   endpoints:
-    - port: {{ .Values.monitoring.vmServiceScrape.port | default "metrics" }}
-      path: {{ .Values.monitoring.vmServiceScrape.path | default "/metrics" }}
-      scheme: {{ .Values.monitoring.vmServiceScrape.scheme | default "http" }}
-      interval: {{ .Values.monitoring.vmServiceScrape.interval }}
+    - port: {{ .Values.metrics.vmServiceScrape.port | default "metrics" }}
+      path: {{ .Values.metrics.vmServiceScrape.path | default "/metrics" }}
+      scheme: {{ .Values.metrics.vmServiceScrape.scheme | default "http" }}
+      interval: {{ .Values.metrics.vmServiceScrape.interval }}
+      {{- with .Values.metrics.vmServiceScrape.tlsConfig }}
+      tlsConfig:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
 {{- end }}

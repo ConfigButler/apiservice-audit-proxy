@@ -134,6 +134,24 @@ func TestParseFlags_Validation(t *testing.T) {
 			},
 			want: "--backend-impersonation-extra-keys requires --backend-identity-mode=impersonation",
 		},
+		{
+			name: "only metrics tls cert",
+			args: []string{
+				"--backend-url=http://backend.local",
+				"--webhook-kubeconfig=/tmp/webhook.kubeconfig",
+				"--metrics-tls-cert-file=/tmp/metrics-tls.crt",
+			},
+			want: "--metrics-tls-cert-file and --metrics-tls-private-key-file must be provided together",
+		},
+		{
+			name: "only metrics tls key",
+			args: []string{
+				"--backend-url=http://backend.local",
+				"--webhook-kubeconfig=/tmp/webhook.kubeconfig",
+				"--metrics-tls-private-key-file=/tmp/metrics-tls.key",
+			},
+			want: "--metrics-tls-cert-file and --metrics-tls-private-key-file must be provided together",
+		},
 	}
 
 	for _, tc := range testCases {
@@ -180,6 +198,21 @@ func TestParseFlags_MetricsListenAddress(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, ":9090", cfg.metricsListenAddress)
+}
+
+func TestParseFlags_MetricsTLSFlags_BothAccepted(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseFlags([]string{
+		"--backend-url=http://backend.local",
+		"--webhook-kubeconfig=/tmp/webhook.kubeconfig",
+		"--metrics-tls-cert-file=/tmp/metrics-tls.crt",
+		"--metrics-tls-private-key-file=/tmp/metrics-tls.key",
+	}, io.Discard)
+	require.NoError(t, err)
+
+	assert.Equal(t, "/tmp/metrics-tls.crt", cfg.metricsTLSCertFile)
+	assert.Equal(t, "/tmp/metrics-tls.key", cfg.metricsTLSPrivateKeyFile)
 }
 
 func TestWrapImpersonationTransport_MissingTokenFile(t *testing.T) {
@@ -398,20 +431,6 @@ func TestNewHTTPServer_UsesStreamingSafeTimeouts(t *testing.T) {
 	assert.Zero(t, server.ReadTimeout, "use ReadHeaderTimeout so large or long-running requests are not body-deadlined")
 	assert.Equal(t, 15*time.Second, server.ReadHeaderTimeout)
 	assert.Equal(t, defaultIdleTimeout, server.IdleTimeout)
-}
-
-func TestNewMetricsServer_UsesPlainHTTPMetricsPort(t *testing.T) {
-	t.Parallel()
-
-	server := newMetricsServer(":0")
-	require.NotNil(t, server)
-	assert.Equal(t, ":0", server.Addr)
-	assert.Equal(t, defaultReadHeaderTimeout, server.ReadHeaderTimeout)
-	assert.Equal(t, defaultIdleTimeout, server.IdleTimeout)
-	assert.NotNil(t, server.ConnState)
-
-	assert.Nil(t, newMetricsServer("0"))
-	assert.Nil(t, newMetricsServer(""))
 }
 
 func TestConnStateTracker_RecordsConnectionStateGauge(t *testing.T) {

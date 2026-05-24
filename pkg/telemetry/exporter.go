@@ -1,10 +1,8 @@
 package telemetry
 
 import (
-	"context"
 	"fmt"
 
-	promclient "github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel"
 	otelprom "go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/metric"
@@ -44,31 +42,16 @@ type upDownSpec struct {
 	dest *metric.Int64UpDownCounter
 }
 
-//nolint:gochecknoinits // Keep package-level instruments safe before explicit exporter initialization.
-func init() {
-	meter = otel.Meter(meterName)
-	_ = registerInstruments()
-}
-
-func InitPrometheusExporter(_ context.Context, registerer promclient.Registerer) (func(context.Context) error, error) {
-	opts := []otelprom.Option{}
-	if registerer != nil {
-		opts = append(opts, otelprom.WithRegisterer(registerer))
-	}
-
-	exporter, err := otelprom.New(opts...)
+func InitPrometheusExporter() error {
+	exporter, err := otelprom.New()
 	if err != nil {
-		return nil, fmt.Errorf("create prometheus metrics exporter: %w", err)
+		return fmt.Errorf("create prometheus metrics exporter: %w", err)
 	}
 
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(exporter))
 	otel.SetMeterProvider(provider)
 	meter = provider.Meter(meterName)
-	if err := registerInstruments(); err != nil {
-		return nil, err
-	}
-
-	return provider.Shutdown, nil
+	return registerInstruments()
 }
 
 func InitTestExporter() (*sdkmetric.ManualReader, error) {

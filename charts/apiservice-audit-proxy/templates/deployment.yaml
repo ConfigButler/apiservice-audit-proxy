@@ -71,7 +71,11 @@ spec:
             {{- toYaml .Values.securityContext | nindent 12 }}
           args:
             - --listen-address={{ .Values.server.listenAddress }}
-            - --metrics-listen-address={{ .Values.server.metrics.listenAddress }}
+            - --metrics-listen-address={{ .Values.metrics.listenAddress }}
+            {{- if .Values.metrics.tls.enabled }}
+            - --metrics-tls-cert-file={{ include "apiservice-audit-proxy.paths.metricsTLS" . }}/tls.crt
+            - --metrics-tls-private-key-file={{ include "apiservice-audit-proxy.paths.metricsTLS" . }}/tls.key
+            {{- end }}
             - --backend-url={{ required "backend.url is required" .Values.backend.url }}
             - --webhook-kubeconfig={{ include "apiservice-audit-proxy.paths.webhook" . }}/{{ .Values.audit.webhook.kubeconfigKey }}
             - --webhook-timeout={{ .Values.audit.webhook.timeout }}
@@ -113,9 +117,9 @@ spec:
             - name: api
               containerPort: {{ .Values.server.containerPort }}
               protocol: TCP
-            {{- if and .Values.server.metrics.listenAddress (ne (toString .Values.server.metrics.listenAddress) "0") }}
+            {{- if and .Values.metrics.listenAddress (ne (toString .Values.metrics.listenAddress) "0") }}
             - name: metrics
-              containerPort: {{ .Values.server.metrics.containerPort }}
+              containerPort: {{ .Values.metrics.containerPort }}
               protocol: TCP
             {{- end }}
           livenessProbe:
@@ -153,6 +157,11 @@ spec:
               mountPath: {{ include "apiservice-audit-proxy.paths.backendClient" . }}
               readOnly: true
             {{- end }}
+            {{- if .Values.metrics.tls.enabled }}
+            - name: metrics-tls
+              mountPath: {{ include "apiservice-audit-proxy.paths.metricsTLS" . }}
+              readOnly: true
+            {{- end }}
             {{- with .Values.volumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -174,6 +183,11 @@ spec:
         - name: backend-client
           secret:
             secretName: {{ $requestheaderClientCert.secretName }}
+        {{- end }}
+        {{- if .Values.metrics.tls.enabled }}
+        - name: metrics-tls
+          secret:
+            secretName: {{ required "metrics.tls.secretName is required when metrics.tls.enabled=true" .Values.metrics.tls.secretName }}
         {{- end }}
         {{- with .Values.volumes }}
         {{- toYaml . | nindent 8 }}

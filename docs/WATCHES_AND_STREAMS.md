@@ -1,14 +1,20 @@
 # Watches, Streams, and Metrics Through `apiservice-audit-proxy`
 
-This document records the current state of the watch streaming fix, the tests
-that prove the important invariants, and the metrics surface used to operate
-the proxy.
+This document is the design contract for how the proxy handles long-lived
+Kubernetes watches and how it exposes operational metrics. It pairs that
+contract with the tests that pin it, and a short status of what is shipped
+versus what is still to land.
 
-The short version: the proxy now treats Kubernetes watches as long-lived
-streams, not normal request/response RPCs. It does not set an inbound write
-deadline, it flushes passthrough responses immediately, it keeps watches out of
-the audited body-spooling path, and it exposes stream, byte, latency, audit, and
-connection metrics on a dedicated plain HTTP metrics server.
+The short version: the proxy treats Kubernetes watches as long-lived streams,
+not normal request/response RPCs. It does not set an inbound write deadline,
+it flushes passthrough responses immediately, it keeps watches out of the
+audited body-spooling path, and it exposes stream, byte, latency, audit, and
+connection metrics on a dedicated metrics listener (plain HTTP by default,
+optional HTTPS).
+
+§4 and §5 describe the target shape of the metrics listener and its chart
+surface. §8 calls out gaps where the implementation has not yet caught up;
+§9 is the plan to close them.
 
 ## 1. Why This Matters
 
@@ -53,9 +59,9 @@ The implementation now matches this contract:
 | No write deadline | `newHTTPServer` leaves `WriteTimeout` and `ReadTimeout` at zero in [cmd/server/main.go](../cmd/server/main.go#L624). |
 | Header-only read protection | `ReadHeaderTimeout` is set to `15s` in [cmd/server/main.go](../cmd/server/main.go#L628). |
 | HTTP/2 serving | `http2.ConfigureServer` is called explicitly in [cmd/server/main.go](../cmd/server/main.go#L633). |
-| Immediate passthrough flush | `ReverseProxy.FlushInterval = -1` in [pkg/proxy/handler.go](../pkg/proxy/handler.go#L157). |
-| Watch bypasses audit spool | `shouldAudit` excludes `get`, `list`, `watch`, `connect`, and `proxy` in [pkg/proxy/handler.go](../pkg/proxy/handler.go#L466). |
-| Streaming telemetry wraps passthrough body | stream start/end and backend byte reads are observed in [pkg/proxy/handler.go](../pkg/proxy/handler.go#L400). |
+| Immediate passthrough flush | `ReverseProxy.FlushInterval = -1` in [pkg/proxy/handler.go](../pkg/proxy/handler.go#L156). |
+| Watch bypasses audit spool | `shouldAudit` excludes `get`, `list`, `watch`, `connect`, and `proxy` in [pkg/proxy/handler.go](../pkg/proxy/handler.go#L465). |
+| Streaming telemetry wraps passthrough body | stream start/end and backend byte reads are observed in [pkg/proxy/handler.go](../pkg/proxy/handler.go#L399). |
 
 ## 3. Tests That Prove The Fix
 
@@ -81,50 +87,73 @@ APIService path as client-go reflectors.
 
 ## 4. Metrics Server
 
-Metrics are served from a dedicated plain HTTP server, separate from the TLS
-APIService listener.
+Metrics are served from a dedicated listener, separate from the APIService
+TLS listener. The endpoint is plain HTTP by default and can be served over
+HTTPS when a key pair is supplied. OpenTelemetry instruments are registered
+once during process start; there is no package `init()` that lazily binds
+them to a no-op meter.
 
-Runtime flag:
+The listener is intentionally minimal: a single goroutine that runs
+`http.ListenAndServe` (or `ListenAndServeTLS`) with a small `*http.ServeMux`
+serving `/metrics`. It has no `ConnState` tracker (Prometheus scrape sockets
+must not inflate `connections_active`), no extra timeouts beyond Go's
+defaults, and no graceful-shutdown plumbing: Prometheus retries scrapes that
+race a process exit. This mirrors the simplicity of gitops-reverser, where
+controller-runtime owns the metrics server with no per-process ceremony.
+
+Runtime flags:
 
 ```text
 --metrics-listen-address=:8080
+--metrics-tls-cert-file=""
+--metrics-tls-private-key-file=""
 ```
 
 Behavior:
 
-- default: `:8080`
-- disable: `--metrics-listen-address=0` or an empty value
+- default address: `:8080`
+- disable the listener: `--metrics-listen-address=0` or empty
 - path: `/metrics`
-- protocol: plain HTTP
-- connection metrics are recorded for both the API server and the metrics
-  server via `http.Server.ConnState`
-
-The server is created in [cmd/server/main.go](../cmd/server/main.go#L642) and
-the flag is wired in [cmd/server/main.go](../cmd/server/main.go#L314).
+- transport: plain HTTP when both TLS flags are empty; HTTPS when both are
+  set. Setting only one of the TLS flags is a startup error, mirroring the
+  APIService TLS flag pair.
 
 Helm values:
 
 ```yaml
-server:
-  metrics:
-    listenAddress: ":8080"
-    containerPort: 8080
-    service:
-      port: 8080
+metrics:
+  # Metrics listener. Set listenAddress to "0" to disable the listener,
+  # the container port, and the Service port together.
+  listenAddress: ":8080"
+  containerPort: 8080
+  service:
+    port: 8080
+
+  # Optional TLS for the metrics endpoint. Plain HTTP by default; on a
+  # dedicated metrics port that is usually fine. Enable this when cluster
+  # policy requires authenticated or encrypted scrapes.
+  tls:
+    enabled: false
+    # Existing Secret in the release namespace containing tls.crt and tls.key.
+    # Required when tls.enabled is true.
+    secretName: ""
 ```
 
-When `server.metrics.listenAddress` is not `0`, the chart renders a `metrics`
-container port and a `metrics` Service port. The scraper resources are still
-off by default.
+When `metrics.listenAddress` is not `0`, the chart renders a `metrics`
+container port and a `metrics` Service port. Setting `metrics.tls.enabled=true`
+mounts the named Secret read-only and passes `--metrics-tls-cert-file` and
+`--metrics-tls-private-key-file` to the Deployment. The scraper resources stay
+off by default; see §5.
 
 ## 5. Scraper Options
 
+Scraper resources live alongside the metrics listener under `metrics.*` and are
+disabled by default.
+
 ### Prometheus Operator
 
-`ServiceMonitor` support is available and disabled by default:
-
 ```yaml
-monitoring:
+metrics:
   serviceMonitor:
     enabled: false
     namespace: ""
@@ -133,17 +162,18 @@ monitoring:
     scrapeTimeout: 10s
     path: /metrics
     port: metrics
+    # When metrics.tls.enabled is true, set scheme: https and supply a
+    # tlsConfig (for example {insecureSkipVerify: true} or a caFile/caSecret).
     scheme: http
+    tlsConfig: {}
 ```
 
 The template is [charts/apiservice-audit-proxy/templates/servicemonitor.yaml](../charts/apiservice-audit-proxy/templates/servicemonitor.yaml).
 
 ### VictoriaMetrics Operator
 
-`VMServiceScrape` support is also available and disabled by default:
-
 ```yaml
-monitoring:
+metrics:
   vmServiceScrape:
     enabled: false
     namespace: ""
@@ -152,6 +182,7 @@ monitoring:
     path: /metrics
     port: metrics
     scheme: http
+    tlsConfig: {}
 ```
 
 Rendered shape:
@@ -192,7 +223,7 @@ audit ID, or raw error string.
 | `apiservice_audit_proxy_streams_active` | UpDownCounter | `kind`, `inbound_proto`, `backend_proto` | Current open watch/stream count. |
 | `apiservice_audit_proxy_stream_duration_seconds` | Histogram | `kind`, `outcome`, `inbound_proto`, `backend_proto` | Stream lifetime and terminal outcome. |
 | `apiservice_audit_proxy_transport_bytes_total` | Counter | `leg`, `streaming`, `direction` | Transported bytes on client/backend legs without decoding bodies. |
-| `apiservice_audit_proxy_connections_active` | UpDownCounter | `state` | Inbound TCP connection counts from `http.Server.ConnState`. HTTP/2 can multiplex many streams on one socket. |
+| `apiservice_audit_proxy_connections_active` | UpDownCounter | `state` | Inbound TCP connection counts on the APIService listener from `http.Server.ConnState`. The metrics listener is intentionally not tracked here, so Prometheus scrape sockets do not inflate the gauge. HTTP/2 can multiplex many streams on one socket. |
 | `apiservice_audit_proxy_audit_events_total` | Counter | `outcome` | Synthetic audit build/send health. |
 | `apiservice_audit_proxy_audit_delivery_duration_seconds` | Histogram | `outcome` | Webhook delivery latency. |
 
@@ -218,8 +249,12 @@ most deterministic:
 | `TestHandler_RecordsRequestMetrics` in [pkg/proxy/handler_test.go](../pkg/proxy/handler_test.go#L301) | A proxied request records request, request-duration, and backend-roundtrip samples with bounded labels. |
 | `TestHandler_RecordsStreamingMetrics` in [pkg/proxy/handler_test.go](../pkg/proxy/handler_test.go#L358) | A fake watch moves `streams_active` from `0` to `1` and back to `0`, records stream duration, and counts transported bytes on both legs. |
 | `TestObservedReadCloser_ClassifiesBackendReadError` in [pkg/proxy/handler_test.go](../pkg/proxy/handler_test.go#L494) | Backend non-EOF read errors become `read_error` outcomes. |
-| `TestNewMetricsServer_UsesPlainHTTPMetricsPort` in [cmd/server/main_test.go](../cmd/server/main_test.go#L403) | The metrics listener is separate, plain HTTP, configurable, and disableable. |
-| `TestConnStateTracker_RecordsConnectionStateGauge` in [cmd/server/main_test.go](../cmd/server/main_test.go#L417) | ConnState transitions update `connections_active` by state. |
+| `TestConnStateTracker_RecordsConnectionStateGauge` in [cmd/server/main_test.go](../cmd/server/main_test.go#L417) | ConnState transitions on the APIService listener update `connections_active` by state. |
+
+The metrics listener itself is an inline goroutine around `http.ListenAndServe`
+/ `http.ListenAndServeTLS` and does not warrant its own factory test. Coverage
+that `/metrics` actually serves the expected payload comes from the scraper-
+backed e2e in §9.
 
 Chart rendering is verified with `task helm:template` and focused Helm template
 commands for the optional scraper resources. A Go-level Helm template test is
@@ -228,38 +263,76 @@ surface.
 
 ## 8. Current Gaps
 
-These items are intentionally not claimed as complete yet:
+These items describe deltas between the §4–§7 contract and the code today.
 
 1. The watch e2e test proves the stream stays useful past the old 30s failure
-   point, but it does not yet query Prometheus/VictoriaMetrics for scraped
-   samples.
-2. HTTP/2 protocol labels are verified indirectly by unit/e2e behavior. A
-   future e2e can query `inbound_proto="http2"` and `backend_proto="http2"`
-   from the scraper after a live watch.
-3. The e2e watch test fails on early EOF/decode errors while waiting for the
-   post-45s event. It does not currently inspect `kubectl` stderr for the exact
-   string `INTERNAL_ERROR`.
-4. `ServiceMonitor` and `VMServiceScrape` use plain HTTP because metrics are on
-   the dedicated metrics port. Hardening that endpoint with TLS is a future
-   operational choice, not part of the simple first implementation.
+   point but does not yet query Prometheus / VictoriaMetrics for scraped
+   samples, and does not inspect `kubectl` stderr for the literal string
+   `INTERNAL_ERROR`. HTTP/2 protocol labels are therefore verified only
+   indirectly. §9 keeps this as a planned follow-up.
 
 ## 9. Implementation Plan From Here
 
-1. Keep the current red-test-first guards as permanent regression tests.
-2. Add scraper-backed e2e assertions:
-   - enable `monitoring.serviceMonitor.enabled` in the e2e chart values;
-   - wait until the proxy target is scraped;
-   - run `TestWatchStaysOpenThroughProxy`;
-   - query for `streams_active`, `stream_duration_seconds`,
-     `transport_bytes_total`, request latency, and protocol labels.
-3. Add the VictoriaMetrics scraper path to a chart-render check if CI starts
-   installing VictoriaMetrics CRDs.
-4. Optionally tighten the e2e watch process assertion by capturing stderr and
-   explicitly rejecting `INTERNAL_ERROR`, while still treating early EOF/decode
-   errors as failures.
-5. Keep timeout values hard-coded unless an operator use case appears. Making
-   stream-safe values configurable would add a footgun that can reintroduce the
-   original bug.
+Land in one PR; the chart change is breaking but pre-release, so no compat
+shims or fail-guards are required.
+
+1. **Slim the telemetry package** ([pkg/telemetry/exporter.go](../pkg/telemetry/exporter.go)).
+   - Delete the package `init()`. Instruments stay nil until `InitPrometheusExporter`
+     or `InitTestExporter` runs. Missing Init now panics loudly on first use.
+   - Change `InitPrometheusExporter` to `func() error`. Drop the unused `ctx`
+     and `registerer` parameters and the returned `Shutdown` function.
+
+2. **Inline the metrics listener** ([cmd/server/main.go](../cmd/server/main.go)).
+   - Delete `newMetricsServer` and the metrics branch of the shutdown
+     goroutine.
+   - Replace with a small inline goroutine: when `metricsListenAddress` is
+     non-empty and not `"0"`, build a `*http.ServeMux` with `/metrics`, then
+     `go func() { http.ListenAndServe(addr, mux) }()` (or `ListenAndServeTLS`
+     when both `--metrics-tls-cert-file` and `--metrics-tls-private-key-file`
+     are set). No `ConnState`, no extra timeouts, no `Shutdown` call.
+   - Add the two TLS flags and a `validateMetricsTLSFlags` check that mirrors
+     the existing `validateServingTLSFlags`: both flags or neither.
+   - Drop the captured `metricsShutdown` variable and its shutdown-goroutine
+     branch.
+
+3. **Reshape the chart**.
+   - Move `server.metrics.*` → top-level `metrics.*` in
+     [values.yaml](../charts/apiservice-audit-proxy/values.yaml).
+   - Move `monitoring.serviceMonitor` → `metrics.serviceMonitor` and
+     `monitoring.vmServiceScrape` → `metrics.vmServiceScrape`. Remove the
+     top-level `monitoring:` key.
+   - Add `metrics.tls.{enabled, secretName}` and wire it through
+     [deployment.yaml](../charts/apiservice-audit-proxy/templates/deployment.yaml):
+     when `tls.enabled` is true, mount the named Secret read-only at a known
+     path and pass `--metrics-tls-cert-file` / `--metrics-tls-private-key-file`.
+   - Update [service.yaml](../charts/apiservice-audit-proxy/templates/service.yaml),
+     [servicemonitor.yaml](../charts/apiservice-audit-proxy/templates/servicemonitor.yaml),
+     and [vmservicescrape.yaml](../charts/apiservice-audit-proxy/templates/vmservicescrape.yaml)
+     to read from the new paths.
+
+4. **Adjust tests**.
+   - Remove `TestNewMetricsServer_UsesPlainHTTPMetricsPort` along with the
+     factory.
+   - Keep `TestConnStateTracker_RecordsConnectionStateGauge` — the tracker
+     still exists, just only on the APIService listener.
+   - Add `TestParseFlags_MetricsTLSFlagsValidation` (both-or-neither) and a
+     small `TestMetricsTLSStartupArgs` if you want to assert the deployment
+     args. The metrics goroutine itself does not need its own unit test.
+
+5. **Planned follow-ups (separate PRs)**:
+   - Add a scraper-backed e2e: enable `metrics.serviceMonitor.enabled` in the
+     e2e values, wait for the proxy target to be scraped, run
+     `TestWatchStaysOpenThroughProxy`, then query Prometheus for
+     `streams_active`, `stream_duration_seconds`, `transport_bytes_total`,
+     request-duration, and protocol-label samples.
+   - Tighten the watch e2e assertion to fail explicitly on `INTERNAL_ERROR`
+     in `kubectl` stderr.
+   - Optionally extend `metrics.tls.*` with chart-managed cert-manager wiring
+     (mirroring `server.tls.mode: cert-manager`) once a real operator asks
+     for it.
+
+Keep timeout values for the APIService listener hard-coded. Making
+stream-safe values configurable would reintroduce a footgun.
 
 ## 10. Verification Commands
 
