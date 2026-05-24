@@ -12,6 +12,11 @@ spec:
       port: {{ .Values.server.service.port }}
       targetPort: api
       protocol: TCP
+    {{- if and .Values.server.metrics.listenAddress (ne (toString .Values.server.metrics.listenAddress) "0") }}
+    - name: metrics
+      port: {{ .Values.server.metrics.service.port }}
+      targetPort: metrics
+      protocol: TCP
+    {{- end }}
   selector:
     {{- include "apiservice-audit-proxy.selectorLabels" . | nindent 4 }}
-

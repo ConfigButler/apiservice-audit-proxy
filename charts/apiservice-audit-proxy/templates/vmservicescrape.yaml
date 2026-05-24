@@ -1,0 +1,21 @@
+{{- if .Values.monitoring.vmServiceScrape.enabled }}
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
+metadata:
+  name: {{ include "apiservice-audit-proxy.fullname" . }}
+  namespace: {{ .Values.monitoring.vmServiceScrape.namespace | default .Release.Namespace }}
+  labels:
+    {{- include "apiservice-audit-proxy.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.vmServiceScrape.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "apiservice-audit-proxy.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: {{ .Values.monitoring.vmServiceScrape.port | default "metrics" }}
+      path: {{ .Values.monitoring.vmServiceScrape.path | default "/metrics" }}
+      scheme: {{ .Values.monitoring.vmServiceScrape.scheme | default "http" }}
+      interval: {{ .Values.monitoring.vmServiceScrape.interval }}
+{{- end }}

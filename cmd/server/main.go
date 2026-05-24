@@ -36,6 +36,7 @@ import (
 
 const (
 	defaultListenAddress     = ":9445"
+	defaultMetricsAddress    = ":8080"
 	defaultReadHeaderTimeout = 15 * time.Second
 	defaultIdleTimeout       = 60 * time.Second
 	defaultShutdownTimeout   = 10 * time.Second
@@ -62,6 +63,7 @@ const (
 
 type config struct {
 	listenAddress                        string
+	metricsListenAddress                 string
 	backendURL                           string
 	backendInsecureSkipVerify            bool
 	backendCAFile                        string
@@ -175,7 +177,6 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/livez", http.HandlerFunc(handleHealth))
 	mux.Handle("/readyz", readinessHandler(trustController))
-	mux.Handle("/metrics", promhttp.Handler())
 	mux.Handle("/", handler)
 
 	server, err := newHTTPServer(cfg.listenAddress, mux, buildServingTLSConfig(cfg))
@@ -183,6 +184,8 @@ func main() {
 		logger.Error("unable to initialize serving HTTP server", "error", err)
 		os.Exit(1)
 	}
+
+	metricsServer := newMetricsServer(cfg.metricsListenAddress)
 
 	logStartupAssumptions(logger, cfg, backendURL)
 
@@ -195,10 +198,24 @@ func main() {
 		if err := server.Shutdown(shutdownCtx); err != nil {
 			logger.Error("graceful shutdown failed", "error", err)
 		}
+		if metricsServer != nil {
+			if err := metricsServer.Shutdown(shutdownCtx); err != nil {
+				logger.Error("metrics server shutdown failed", "error", err)
+			}
+		}
 		if err := metricsShutdown(shutdownCtx); err != nil {
 			logger.Error("metrics shutdown failed", "error", err)
 		}
 	}()
+
+	if metricsServer != nil {
+		go func() {
+			logger.Info("metrics server listening", "address", cfg.metricsListenAddress)
+			if err := metricsServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				logger.Error("metrics server exited with error", "error", err)
+			}
+		}()
+	}
 
 	logger.Info("audit pass-through API server listening; waiting for first request from the cluster",
 		"address", cfg.listenAddress,
@@ -261,6 +278,15 @@ func logStartupAssumptions(logger *slog.Logger, cfg config, backendURL *url.URL)
 			"private_key_file", cfg.tlsPrivateKeyFile,
 		)
 	}
+
+	if cfg.metricsListenAddress == "" || cfg.metricsListenAddress == "0" {
+		logger.Info("metrics server disabled")
+	} else {
+		logger.Info("serving metrics over plain HTTP",
+			"address", cfg.metricsListenAddress,
+			"path", "/metrics",
+		)
+	}
 }
 
 // webhookEndpointString returns the configured webhook destination as a string
@@ -283,6 +309,12 @@ func parseFlags(args []string, stderr io.Writer) (config, error) {
 	fs := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.StringVar(&cfg.listenAddress, "listen-address", defaultListenAddress, "Address for the pass-through server.")
+	fs.StringVar(
+		&cfg.metricsListenAddress,
+		"metrics-listen-address",
+		defaultMetricsAddress,
+		"Address for the plain HTTP metrics server. Set to 0 or empty to disable.",
+	)
 	fs.StringVar(&cfg.backendURL, "backend-url", "", "URL of the real aggregated backend.")
 	fs.BoolVar(
 		&cfg.backendInsecureSkipVerify,
@@ -607,6 +639,23 @@ func newHTTPServer(addr string, handler http.Handler, tlsConfig *tls.Config) (*h
 	return server, nil
 }
 
+func newMetricsServer(addr string) *http.Server {
+	if addr == "" || addr == "0" {
+		return nil
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+
+	return &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: defaultReadHeaderTimeout,
+		IdleTimeout:       defaultIdleTimeout,
+		ConnState:         newConnStateTracker(),
+	}
+}
+
 type connStateTracker struct {
 	mu     sync.Mutex
 	states map[net.Conn]http.ConnState
@@ -627,12 +676,11 @@ func (t *connStateTracker) observe(conn net.Conn, next http.ConnState) {
 	}
 	t.mu.Unlock()
 
-	ctx := context.Background()
 	if hadPrevious {
-		telemetry.AddConnection(ctx, previous.String(), "unknown", -1)
+		telemetry.AddConnection(context.Background(), previous.String(), -1)
 	}
 	if next != http.StateClosed && next != http.StateHijacked {
-		telemetry.AddConnection(ctx, next.String(), "unknown", 1)
+		telemetry.AddConnection(context.Background(), next.String(), 1)
 	}
 }
 

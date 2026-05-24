@@ -71,6 +71,7 @@ spec:
             {{- toYaml .Values.securityContext | nindent 12 }}
           args:
             - --listen-address={{ .Values.server.listenAddress }}
+            - --metrics-listen-address={{ .Values.server.metrics.listenAddress }}
             - --backend-url={{ required "backend.url is required" .Values.backend.url }}
             - --webhook-kubeconfig={{ include "apiservice-audit-proxy.paths.webhook" . }}/{{ .Values.audit.webhook.kubeconfigKey }}
             - --webhook-timeout={{ .Values.audit.webhook.timeout }}
@@ -112,6 +113,11 @@ spec:
             - name: api
               containerPort: {{ .Values.server.containerPort }}
               protocol: TCP
+            {{- if and .Values.server.metrics.listenAddress (ne (toString .Values.server.metrics.listenAddress) "0") }}
+            - name: metrics
+              containerPort: {{ .Values.server.metrics.containerPort }}
+              protocol: TCP
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /livez

@@ -77,7 +77,6 @@ func TestStreamStartedRecordsActiveGaugeAndDuration(t *testing.T) {
 
 	active, ok := CollectInt64Sum(reader, "apiservice_audit_proxy_streams_active", map[string]string{
 		"kind":          "watch",
-		"outcome":       "active",
 		"inbound_proto": "http2",
 		"backend_proto": "http2",
 	})
@@ -88,7 +87,6 @@ func TestStreamStartedRecordsActiveGaugeAndDuration(t *testing.T) {
 
 	active, ok = CollectInt64Sum(reader, "apiservice_audit_proxy_streams_active", map[string]string{
 		"kind":          "watch",
-		"outcome":       "active",
 		"inbound_proto": "http2",
 		"backend_proto": "http2",
 	})

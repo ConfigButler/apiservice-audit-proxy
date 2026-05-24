@@ -65,6 +65,14 @@ server:
   listenAddress: ":9445"
   containerPort: 9445
 
+  metrics:
+    # Plain HTTP metrics endpoint. Set listenAddress to "0" to disable the
+    # metrics server entirely.
+    listenAddress: ":8080"
+    containerPort: 8080
+    service:
+      port: 8080
+
   # APIService registration that makes kube-apiserver route aggregated API
   # traffic to this proxy.
   apiService:
@@ -308,10 +316,17 @@ monitoring:
     interval: 30s
     scrapeTimeout: 10s
     path: /metrics
-    port: api
-    scheme: https
-    tlsConfig:
-      insecureSkipVerify: true
+    port: metrics
+    scheme: http
+
+  vmServiceScrape:
+    enabled: false
+    namespace: ""
+    labels: {}
+    interval: 30s
+    path: /metrics
+    port: metrics
+    scheme: http
 
 # Compute resources for the proxy container.
 resources: {}

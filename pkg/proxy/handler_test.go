@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,6 +29,7 @@ import (
 	requestinfo "k8s.io/apiserver/pkg/endpoints/request"
 
 	"github.com/ConfigButler/apiservice-audit-proxy/pkg/identity"
+	"github.com/ConfigButler/apiservice-audit-proxy/pkg/telemetry"
 )
 
 func TestHandler_MutatingRequest_ProxiesAndEmitsEvent(t *testing.T) {
@@ -294,6 +296,236 @@ func TestShouldAudit_ExcludesReadAndLongRunningVerbs(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestHandler_RecordsRequestMetrics(t *testing.T) {
+	reader, err := telemetry.InitTestExporter()
+	require.NoError(t, err)
+
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"items":[]}`))
+	}))
+	defer backend.Close()
+
+	backendURL, err := url.Parse(backend.URL)
+	require.NoError(t, err)
+
+	handler, err := NewHandler(HandlerConfig{
+		BackendURL:        backendURL,
+		WebhookClient:     &fakeWebhookClient{delivered: make(chan auditv1.EventList, 1)},
+		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		MaxAuditBodyBytes: 4096,
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"http://proxy.local/apis/wardle.example.com/v1alpha1/namespaces/default/flunders",
+		nil,
+	)
+	req.Header.Set("X-Remote-User", "alice")
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	assert.Equal(t, http.StatusOK, recorder.Code)
+
+	requests, ok := telemetry.CollectInt64Sum(reader, "apiservice_audit_proxy_requests_total", map[string]string{
+		"verb":           "list",
+		"resource_group": "wardle.example.com",
+		"resource":       "flunders",
+		"audited":        "false",
+		"streaming":      "false",
+		"status_class":   "2xx",
+		"outcome":        "ok",
+	})
+	require.True(t, ok)
+	assert.Equal(t, int64(1), requests)
+
+	durationCount, ok := telemetry.CollectHistogramCount(reader,
+		"apiservice_audit_proxy_request_duration_seconds",
+		map[string]string{"verb": "list", "resource": "flunders"})
+	require.True(t, ok)
+	assert.Equal(t, uint64(1), durationCount)
+
+	backendDurationCount, ok := telemetry.CollectHistogramCount(reader,
+		"apiservice_audit_proxy_backend_roundtrip_seconds",
+		map[string]string{"verb": "list", "outcome": "ok"})
+	require.True(t, ok)
+	assert.Equal(t, uint64(1), backendDurationCount)
+}
+
+func TestHandler_RecordsStreamingMetrics(t *testing.T) {
+	reader, err := telemetry.InitTestExporter()
+	require.NoError(t, err)
+
+	firstEventWritten := make(chan struct{})
+	releaseBackend := make(chan struct{})
+	releaseBackendOnce := sync.Once{}
+	releaseBackendForNextEvent := func() {
+		releaseBackendOnce.Do(func() {
+			close(releaseBackend)
+		})
+	}
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Errorf("test backend must support flushing")
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json;stream=watch")
+		w.WriteHeader(http.StatusOK)
+		firstEvent := `{"type":"BOOKMARK","object":{"kind":"Status","apiVersion":"v1","metadata":{"resourceVersion":"1"}}}` + "\n"
+		_, writeErr := w.Write([]byte(firstEvent))
+		assert.NoError(t, writeErr)
+		flusher.Flush()
+		close(firstEventWritten)
+
+		select {
+		case <-releaseBackend:
+			nextEvent := `{"type":"BOOKMARK","object":{"kind":"Status","apiVersion":"v1","metadata":{"resourceVersion":"2"}}}` + "\n"
+			_, writeErr := w.Write([]byte(nextEvent))
+			assert.NoError(t, writeErr)
+			flusher.Flush()
+			<-r.Context().Done()
+		case <-r.Context().Done():
+		}
+	}))
+	defer backend.Close()
+	defer releaseBackendForNextEvent()
+
+	backendURL, err := url.Parse(backend.URL)
+	require.NoError(t, err)
+
+	handler, err := NewHandler(HandlerConfig{
+		BackendURL:        backendURL,
+		WebhookClient:     &fakeWebhookClient{delivered: make(chan auditv1.EventList, 1)},
+		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		MaxAuditBodyBytes: 4096,
+	})
+	require.NoError(t, err)
+
+	proxy := httptest.NewServer(handler)
+	defer proxy.Close()
+
+	req, err := http.NewRequest(
+		http.MethodGet,
+		proxy.URL+"/apis/wardle.example.com/v1alpha1/namespaces/default/flunders?watch=true",
+		nil,
+	)
+	require.NoError(t, err)
+	req.Header.Set("X-Remote-User", "alice")
+
+	resp, err := proxy.Client().Do(req)
+	require.NoError(t, err)
+
+	select {
+	case <-firstEventWritten:
+	case <-time.After(2 * time.Second):
+		t.Fatal("backend did not write first watch event")
+	}
+
+	line, err := bufio.NewReader(resp.Body).ReadString('\n')
+	require.NoError(t, err)
+	assert.Contains(t, line, `"BOOKMARK"`)
+
+	active, ok := telemetry.CollectInt64Sum(reader, "apiservice_audit_proxy_streams_active", map[string]string{
+		"kind":          "watch",
+		"outcome":       "active",
+		"inbound_proto": "http1",
+	})
+	assert.False(t, ok, "active stream gauge should not carry an outcome label")
+	_ = active
+
+	active, ok = telemetry.CollectInt64Sum(reader, "apiservice_audit_proxy_streams_active", map[string]string{
+		"kind":          "watch",
+		"inbound_proto": "http1",
+		"backend_proto": "http1",
+	})
+	require.True(t, ok)
+	assert.Equal(t, int64(1), active)
+
+	require.NoError(t, resp.Body.Close())
+	releaseBackendForNextEvent()
+
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		active, ok := telemetry.CollectInt64Sum(reader, "apiservice_audit_proxy_streams_active", map[string]string{
+			"kind":          "watch",
+			"inbound_proto": "http1",
+			"backend_proto": "http1",
+		})
+		require.True(c, ok)
+		assert.Equal(c, int64(0), active)
+
+		var durationCount uint64
+		for _, outcome := range []string{outcomeClientCancel, outcomeBackendClose, outcomeReadError} {
+			count, found := telemetry.CollectHistogramCount(reader,
+				"apiservice_audit_proxy_stream_duration_seconds",
+				map[string]string{"kind": "watch", "outcome": outcome})
+			if found {
+				durationCount += count
+			}
+		}
+		assert.Equal(c, uint64(1), durationCount)
+	}, 2*time.Second, 25*time.Millisecond)
+
+	backendBytes, ok := telemetry.CollectInt64Sum(reader,
+		"apiservice_audit_proxy_transport_bytes_total",
+		map[string]string{
+			"leg":       "backend",
+			"streaming": "true",
+			"direction": "read",
+		})
+	require.True(t, ok)
+	assert.Positive(t, backendBytes)
+
+	clientBytes, ok := telemetry.CollectInt64Sum(reader,
+		"apiservice_audit_proxy_transport_bytes_total",
+		map[string]string{
+			"leg":       "client",
+			"streaming": "true",
+			"direction": "write",
+		})
+	require.True(t, ok)
+	assert.Positive(t, clientBytes)
+}
+
+func TestObservedReadCloser_ClassifiesBackendReadError(t *testing.T) {
+	t.Parallel()
+
+	expectedErr := errors.New("backend reset")
+	var gotOutcome string
+	body := observeClose(readCloserFunc{
+		read: func(_ []byte) (int, error) {
+			return 0, expectedErr
+		},
+		close: func() error {
+			return nil
+		},
+	}, func(outcome string) {
+		gotOutcome = outcome
+	})
+
+	_, err := body.Read(make([]byte, 1))
+	require.ErrorIs(t, err, expectedErr)
+	assert.Equal(t, outcomeReadError, gotOutcome)
+
+	require.NoError(t, body.Close())
+	assert.Equal(t, outcomeReadError, gotOutcome)
+}
+
+type readCloserFunc struct {
+	read  func([]byte) (int, error)
+	close func() error
+}
+
+func (f readCloserFunc) Read(p []byte) (int, error) {
+	return f.read(p)
+}
+
+func (f readCloserFunc) Close() error {
+	return f.close()
 }
 
 func TestHandler_WebhookFailure_DoesNotFailProxiedResponse(t *testing.T) {

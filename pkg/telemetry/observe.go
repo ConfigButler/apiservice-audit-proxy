@@ -10,7 +10,6 @@ import (
 )
 
 const (
-	outcomeActive = "active"
 	labelUnknown  = "unknown"
 	protoHTTP2    = "HTTP/2.0"
 	protoHTTP2Out = "http2"
@@ -78,7 +77,6 @@ func AddTransportBytes(ctx context.Context, labels TransportByteLabels, bytes in
 
 func StreamStarted(ctx context.Context, labels StreamLabels) func(string) {
 	start := time.Now()
-	labels.Outcome = outcomeActive
 	activeAttrs := streamAttrs(labels)
 	StreamsActive.Add(ctx, 1, activeAttrs)
 
@@ -89,10 +87,9 @@ func StreamStarted(ctx context.Context, labels StreamLabels) func(string) {
 	}
 }
 
-func AddConnection(ctx context.Context, state, proto string, delta int64) {
+func AddConnection(ctx context.Context, state string, delta int64) {
 	ConnectionsActive.Add(ctx, delta, metric.WithAttributes(
 		attribute.String("state", state),
-		attribute.String("proto", normalizeProto(proto)),
 	))
 }
 

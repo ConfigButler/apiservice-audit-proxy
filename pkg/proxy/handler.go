@@ -36,6 +36,7 @@ const (
 	outcomeBackendClose = "backend_close"
 	outcomeClientCancel = "client_cancel"
 	outcomeError        = "error"
+	outcomeReadError    = "read_error"
 	outcomeOK           = "ok"
 	labelUnknown        = "unknown"
 
@@ -675,8 +676,12 @@ func (r *observedReadCloser) Read(p []byte) (int, error) {
 	if n > 0 && r.observe != nil {
 		r.observe(int64(n))
 	}
-	if err == io.EOF && r.onClose != nil {
-		r.onClose(outcomeBackendClose)
+	if err != nil && r.onClose != nil {
+		if err == io.EOF {
+			r.onClose(outcomeBackendClose)
+		} else {
+			r.onClose(outcomeReadError)
+		}
 		r.onClose = nil
 	}
 	return n, err

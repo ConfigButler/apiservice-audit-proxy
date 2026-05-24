@@ -9,6 +9,7 @@ import (
 	"encoding/pem"
 	"io"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -19,6 +20,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ConfigButler/apiservice-audit-proxy/pkg/telemetry"
 )
 
 func TestParseFlags_Validation(t *testing.T) {
@@ -164,6 +167,19 @@ func TestParseFlags_ImpersonationMode_Accepted(t *testing.T) {
 	assert.Equal(t, "scopes,example.com/tenant", cfg.backendImpersonationExtraKeys)
 	assert.False(t, cfg.backendImpersonationForwardUID)
 	assert.False(t, cfg.backendImpersonationForwardAllExtras)
+}
+
+func TestParseFlags_MetricsListenAddress(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseFlags([]string{
+		"--backend-url=http://backend.local",
+		"--webhook-kubeconfig=/tmp/webhook.kubeconfig",
+		"--metrics-listen-address=:9090",
+	}, io.Discard)
+	require.NoError(t, err)
+
+	assert.Equal(t, ":9090", cfg.metricsListenAddress)
 }
 
 func TestWrapImpersonationTransport_MissingTokenFile(t *testing.T) {
@@ -382,6 +398,54 @@ func TestNewHTTPServer_UsesStreamingSafeTimeouts(t *testing.T) {
 	assert.Zero(t, server.ReadTimeout, "use ReadHeaderTimeout so large or long-running requests are not body-deadlined")
 	assert.Equal(t, 15*time.Second, server.ReadHeaderTimeout)
 	assert.Equal(t, defaultIdleTimeout, server.IdleTimeout)
+}
+
+func TestNewMetricsServer_UsesPlainHTTPMetricsPort(t *testing.T) {
+	t.Parallel()
+
+	server := newMetricsServer(":0")
+	require.NotNil(t, server)
+	assert.Equal(t, ":0", server.Addr)
+	assert.Equal(t, defaultReadHeaderTimeout, server.ReadHeaderTimeout)
+	assert.Equal(t, defaultIdleTimeout, server.IdleTimeout)
+	assert.NotNil(t, server.ConnState)
+
+	assert.Nil(t, newMetricsServer("0"))
+	assert.Nil(t, newMetricsServer(""))
+}
+
+func TestConnStateTracker_RecordsConnectionStateGauge(t *testing.T) {
+	reader, err := telemetry.InitTestExporter()
+	require.NoError(t, err)
+
+	clientConn, serverConn := net.Pipe()
+	defer func() {
+		_ = clientConn.Close()
+		_ = serverConn.Close()
+	}()
+
+	observe := newConnStateTracker()
+	observe(serverConn, http.StateNew)
+
+	newCount, ok := telemetry.CollectInt64Sum(reader,
+		"apiservice_audit_proxy_connections_active",
+		map[string]string{"state": http.StateNew.String()})
+	require.True(t, ok)
+	assert.Equal(t, int64(1), newCount)
+
+	observe(serverConn, http.StateActive)
+
+	newCount, ok = telemetry.CollectInt64Sum(reader,
+		"apiservice_audit_proxy_connections_active",
+		map[string]string{"state": http.StateNew.String()})
+	require.True(t, ok)
+	assert.Equal(t, int64(0), newCount)
+
+	activeCount, ok := telemetry.CollectInt64Sum(reader,
+		"apiservice_audit_proxy_connections_active",
+		map[string]string{"state": http.StateActive.String()})
+	require.True(t, ok)
+	assert.Equal(t, int64(1), activeCount)
 }
 
 func writeBackendCertFile(t *testing.T, certDER []byte) string {
