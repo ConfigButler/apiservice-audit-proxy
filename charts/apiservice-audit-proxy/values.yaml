@@ -297,6 +297,22 @@ audit:
       runAsUser: 10001
       runAsGroup: 10001
 
+# ============================================================================
+# Monitoring
+# ============================================================================
+monitoring:
+  serviceMonitor:
+    enabled: false
+    namespace: ""
+    labels: {}
+    interval: 30s
+    scrapeTimeout: 10s
+    path: /metrics
+    port: api
+    scheme: https
+    tlsConfig:
+      insecureSkipVerify: true
+
 # Compute resources for the proxy container.
 resources: {}
 

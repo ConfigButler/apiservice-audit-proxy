@@ -116,6 +116,13 @@ tasks:
       - E2E_PROXY_VALUES_FILE=test/e2e/values/proxy-cert-manager-backend-ca.yaml task e2e:portforward-webhook-tester
       - "CTX={{.CTX}} WEBHOOK_TESTER_BASE_URL={{.WEBHOOK_TESTER_BASE_URL}} go test -tags=e2e -run 'TestSmoke' -count=1 -v ./test/e2e"
 
+  e2e:test-watch-streams:
+    desc: Prove long aggregated API watches survive beyond the proxy write-timeout regression window
+    deps:
+      - e2e:portforward-webhook-tester
+    cmds:
+      - "CTX={{.CTX}} WEBHOOK_TESTER_BASE_URL={{.WEBHOOK_TESTER_BASE_URL}} go test -tags=e2e -run 'TestWatchStaysOpenThroughProxy' -count=1 -v ./test/e2e"
+
   e2e:test-impersonation:
     desc: |
       Run the impersonation-mode scenarios (audited write, non-audited

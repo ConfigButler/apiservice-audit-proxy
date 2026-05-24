@@ -9,15 +9,19 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"golang.org/x/net/http2"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -26,17 +30,17 @@ import (
 
 	"github.com/ConfigButler/apiservice-audit-proxy/pkg/identity"
 	auditproxy "github.com/ConfigButler/apiservice-audit-proxy/pkg/proxy"
+	"github.com/ConfigButler/apiservice-audit-proxy/pkg/telemetry"
 	"github.com/ConfigButler/apiservice-audit-proxy/pkg/webhook"
 )
 
 const (
-	defaultListenAddress    = ":9445"
-	defaultReadTimeout      = 15 * time.Second
-	defaultWriteTimeout     = 30 * time.Second
-	defaultIdleTimeout      = 60 * time.Second
-	defaultShutdownTimeout  = 10 * time.Second
-	defaultWebhookTimeout   = 5 * time.Second
-	defaultMaxAuditBodySize = int64(1024 * 1024)
+	defaultListenAddress     = ":9445"
+	defaultReadHeaderTimeout = 15 * time.Second
+	defaultIdleTimeout       = 60 * time.Second
+	defaultShutdownTimeout   = 10 * time.Second
+	defaultWebhookTimeout    = 5 * time.Second
+	defaultMaxAuditBodySize  = int64(1024 * 1024)
 
 	// requestHeaderTrustStartupTimeout bounds the strict initial load of
 	// requestheader trust from the cluster ConfigMap. If no usable trust
@@ -162,19 +166,23 @@ func main() {
 		os.Exit(1)
 	}
 
+	metricsShutdown, err := telemetry.InitPrometheusExporter(ctx, nil)
+	if err != nil {
+		logger.Error("unable to initialize metrics exporter", "error", err)
+		os.Exit(1)
+	}
+
 	mux := http.NewServeMux()
 	mux.Handle("/livez", http.HandlerFunc(handleHealth))
 	mux.Handle("/readyz", readinessHandler(trustController))
+	mux.Handle("/metrics", promhttp.Handler())
 	mux.Handle("/", handler)
 
-	server := &http.Server{
-		Addr:         cfg.listenAddress,
-		Handler:      mux,
-		ReadTimeout:  defaultReadTimeout,
-		WriteTimeout: defaultWriteTimeout,
-		IdleTimeout:  defaultIdleTimeout,
+	server, err := newHTTPServer(cfg.listenAddress, mux, buildServingTLSConfig(cfg))
+	if err != nil {
+		logger.Error("unable to initialize serving HTTP server", "error", err)
+		os.Exit(1)
 	}
-	server.TLSConfig = buildServingTLSConfig(cfg)
 
 	logStartupAssumptions(logger, cfg, backendURL)
 
@@ -186,6 +194,9 @@ func main() {
 		defer cancel()
 		if err := server.Shutdown(shutdownCtx); err != nil {
 			logger.Error("graceful shutdown failed", "error", err)
+		}
+		if err := metricsShutdown(shutdownCtx); err != nil {
+			logger.Error("metrics shutdown failed", "error", err)
 		}
 	}()
 
@@ -575,6 +586,53 @@ func waitForTrust(ctx context.Context, controller *identity.RequestHeaderTrustCo
 			return ctx.Err()
 		case <-ticker.C:
 		}
+	}
+}
+
+func newHTTPServer(addr string, handler http.Handler, tlsConfig *tls.Config) (*http.Server, error) {
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: defaultReadHeaderTimeout,
+		IdleTimeout:       defaultIdleTimeout,
+		TLSConfig:         tlsConfig,
+		ConnState:         newConnStateTracker(),
+	}
+	if err := http2.ConfigureServer(server, &http2.Server{
+		IdleTimeout: server.IdleTimeout,
+	}); err != nil {
+		return nil, fmt.Errorf("configure HTTP/2 server: %w", err)
+	}
+
+	return server, nil
+}
+
+type connStateTracker struct {
+	mu     sync.Mutex
+	states map[net.Conn]http.ConnState
+}
+
+func newConnStateTracker() func(net.Conn, http.ConnState) {
+	tracker := &connStateTracker{states: make(map[net.Conn]http.ConnState)}
+	return tracker.observe
+}
+
+func (t *connStateTracker) observe(conn net.Conn, next http.ConnState) {
+	t.mu.Lock()
+	previous, hadPrevious := t.states[conn]
+	if next == http.StateClosed || next == http.StateHijacked {
+		delete(t.states, conn)
+	} else {
+		t.states[conn] = next
+	}
+	t.mu.Unlock()
+
+	ctx := context.Background()
+	if hadPrevious {
+		telemetry.AddConnection(ctx, previous.String(), "unknown", -1)
+	}
+	if next != http.StateClosed && next != http.StateHijacked {
+		telemetry.AddConnection(ctx, next.String(), "unknown", 1)
 	}
 }
 

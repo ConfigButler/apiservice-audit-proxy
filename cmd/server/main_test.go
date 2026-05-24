@@ -372,6 +372,18 @@ func TestBuildServingTLSConfig_PlainHTTPWhenNoCert(t *testing.T) {
 	assert.Nil(t, buildServingTLSConfig(config{}))
 }
 
+func TestNewHTTPServer_UsesStreamingSafeTimeouts(t *testing.T) {
+	t.Parallel()
+
+	server, err := newHTTPServer(":0", http.HandlerFunc(handleHealth), nil)
+	require.NoError(t, err)
+
+	assert.Zero(t, server.WriteTimeout, "watch responses must not be killed by a fixed write deadline")
+	assert.Zero(t, server.ReadTimeout, "use ReadHeaderTimeout so large or long-running requests are not body-deadlined")
+	assert.Equal(t, 15*time.Second, server.ReadHeaderTimeout)
+	assert.Equal(t, defaultIdleTimeout, server.IdleTimeout)
+}
+
 func writeBackendCertFile(t *testing.T, certDER []byte) string {
 	t.Helper()
 

@@ -21,10 +21,26 @@ import (
 
 	auditevents "github.com/ConfigButler/apiservice-audit-proxy/pkg/audit"
 	"github.com/ConfigButler/apiservice-audit-proxy/pkg/identity"
+	"github.com/ConfigButler/apiservice-audit-proxy/pkg/telemetry"
 	"github.com/ConfigButler/apiservice-audit-proxy/pkg/webhook"
 )
 
 const asyncSendTimeout = 5 * time.Second
+
+const (
+	transportLegBackend = "backend"
+	transportLegClient  = "client"
+	directionRead       = "read"
+	directionWrite      = "write"
+	watchVerb           = "watch"
+	outcomeBackendClose = "backend_close"
+	outcomeClientCancel = "client_cancel"
+	outcomeError        = "error"
+	outcomeOK           = "ok"
+	labelUnknown        = "unknown"
+
+	statusServerErrorMin = 500
+)
 
 // HandlerConfig configures the proxy handler.
 type HandlerConfig struct {
@@ -67,6 +83,7 @@ type Handler struct {
 // userInfoContextKey is the typed context key carrying the verified delegated
 // identity into the passthrough ReverseProxy Rewrite hook.
 type userInfoContextKey struct{}
+type requestMetricContextKey struct{}
 
 func contextWithUserInfo(parent context.Context, user authnv1.UserInfo) context.Context {
 	return context.WithValue(parent, userInfoContextKey{}, user)
@@ -75,6 +92,15 @@ func contextWithUserInfo(parent context.Context, user authnv1.UserInfo) context.
 func userInfoFromContext(ctx context.Context) (authnv1.UserInfo, bool) {
 	user, ok := ctx.Value(userInfoContextKey{}).(authnv1.UserInfo)
 	return user, ok
+}
+
+func contextWithRequestMetrics(parent context.Context, state *requestMetricState) context.Context {
+	return context.WithValue(parent, requestMetricContextKey{}, state)
+}
+
+func requestMetricsFromContext(ctx context.Context) (*requestMetricState, bool) {
+	state, ok := ctx.Value(requestMetricContextKey{}).(*requestMetricState)
+	return state, ok
 }
 
 // NewHandler creates a new proxy handler.
@@ -126,7 +152,8 @@ func NewHandler(cfg HandlerConfig) (*Handler, error) {
 	}
 
 	handler.passthrough = &httputil.ReverseProxy{
-		Transport: transport,
+		Transport:     transport,
+		FlushInterval: -1,
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(cfg.BackendURL)
 			// SetURL does not touch X-Forwarded-*. Set X-Forwarded-For
@@ -140,9 +167,13 @@ func NewHandler(cfg HandlerConfig) (*Handler, error) {
 		},
 		ModifyResponse: func(resp *http.Response) error {
 			handler.notifyFirstBackendOK(resp)
+			handler.observePassthroughResponse(resp)
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			if state, ok := requestMetricsFromContext(r.Context()); ok {
+				state.recordBackendRoundTrip(r.Context(), outcomeError)
+			}
 			logger.Error("passthrough proxy request failed", "error", err, "path", r.URL.Path)
 			http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
 		},
@@ -155,6 +186,25 @@ func NewHandler(cfg HandlerConfig) (*Handler, error) {
 // emits one best-effort ResponseComplete audit event after the proxied response
 // has been captured.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	metricState := newRequestMetricState(r)
+	r = r.WithContext(contextWithRequestMetrics(r.Context(), metricState))
+	r.Body = observeReadCloser(r.Body, func(n int64) {
+		telemetry.AddTransportBytes(r.Context(), telemetry.TransportByteLabels{
+			Leg:       transportLegClient,
+			Streaming: metricState.Streaming(),
+			Direction: directionRead,
+		}, n)
+	})
+	metricWriter := newMetricResponseWriter(r.Context(), w, metricState)
+	defer func() {
+		telemetry.RecordRequest(
+			r.Context(),
+			metricState.RequestLabels(metricWriter.StatusCode()),
+			time.Since(metricState.start),
+		)
+	}()
+	w = metricWriter
+
 	h.firstRequest.Do(func() {
 		h.logger.Info("first inbound request received — proxy is reachable from the cluster",
 			"method", r.Method,
@@ -191,7 +241,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.passthrough.ServeHTTP(w, r)
 		return
 	}
-	if !shouldAudit(info) {
+	audited := shouldAudit(info)
+	metricState.SetRequestInfo(info, audited)
+	if !audited {
 		h.passthrough.ServeHTTP(w, r)
 		return
 	}
@@ -219,22 +271,28 @@ func (h *Handler) serveAudited(
 		}
 	}()
 
-	upstreamBody, err := requestBody.Open()
+	upstreamFile, err := requestBody.Open()
 	if err != nil {
 		h.logger.Error("unable to reopen request body", "error", err, "path", r.URL.Path)
 		http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
 		return
 	}
+	var upstreamBody io.ReadCloser = upstreamFile
+	upstreamBody = observeTransportBytes(r.Context(), upstreamBody, transportLegBackend, false, directionWrite)
 
 	upstreamRequest := h.buildUpstreamRequest(r, upstreamBody, requestBody.size, userInfo)
 
 	response, err := h.transport.RoundTrip(upstreamRequest)
 	if err != nil {
+		if state, ok := requestMetricsFromContext(r.Context()); ok {
+			state.recordBackendRoundTrip(r.Context(), outcomeError)
+		}
 		h.logger.Error("upstream request failed", "error", err, "path", r.URL.Path)
 		http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
 		return
 	}
 	h.notifyFirstBackendOK(response)
+	observeAuditedBackendResponse(r.Context(), response)
 	defer func() {
 		_ = response.Body.Close()
 	}()
@@ -267,6 +325,7 @@ func (h *Handler) serveAudited(
 		h.logger.Error("unable to write proxied response", "error", err, "path", r.URL.Path)
 	}
 
+	//nolint:gosec // Audit delivery is best-effort work deliberately detached from the request lifetime.
 	go h.buildAndSendAuditEvent(r, info, userInfo, requestBody, responseBody, response.StatusCode, requestReceivedAt)
 }
 
@@ -293,10 +352,12 @@ func (h *Handler) buildAndSendAuditEvent(
 		ResponseCompletedAt:   time.Now().UTC(),
 	})
 	if err != nil {
+		telemetry.AddAuditEvent(context.Background(), "build_error")
 		h.logger.Error("unable to build audit event", "error", err, "path", r.URL.Path)
 		return
 	}
 
+	telemetry.AddAuditEvent(context.Background(), "built")
 	h.sendBestEffort(*event, r.URL.Path)
 }
 
@@ -304,10 +365,15 @@ func (h *Handler) sendBestEffort(event auditv1.Event, path string) {
 	ctx, cancel := context.WithTimeout(context.Background(), asyncSendTimeout)
 	defer cancel()
 
+	start := time.Now()
 	if err := h.webhook.Send(ctx, auditevents.Wrap(event)); err != nil {
+		telemetry.AddAuditEvent(context.Background(), "send_error")
+		telemetry.RecordAuditDelivery(context.Background(), "send_error", time.Since(start))
 		h.logger.Error("best-effort webhook delivery failed", "error", err, "path", path)
 		return
 	}
+	telemetry.AddAuditEvent(context.Background(), "sent")
+	telemetry.RecordAuditDelivery(context.Background(), "sent", time.Since(start))
 	h.firstWebhookOK.Do(func() {
 		h.logger.Info("first audit event delivered to webhook receiver — audit pipeline is healthy",
 			"path", path,
@@ -328,6 +394,47 @@ func (h *Handler) notifyFirstBackendOK(resp *http.Response) {
 			"status", resp.StatusCode,
 		)
 	})
+}
+
+func (h *Handler) observePassthroughResponse(resp *http.Response) {
+	if resp == nil || resp.Request == nil {
+		return
+	}
+	state, ok := requestMetricsFromContext(resp.Request.Context())
+	if !ok {
+		return
+	}
+
+	streaming := isStreamingResponse(resp) || state.Streaming()
+	state.SetBackend(resp.Proto, streaming)
+	state.recordBackendRoundTrip(resp.Request.Context(), outcomeOK)
+
+	resp.Body = observeReadCloser(resp.Body, func(n int64) {
+		telemetry.AddTransportBytes(resp.Request.Context(), telemetry.TransportByteLabels{
+			Leg:       transportLegBackend,
+			Streaming: state.Streaming(),
+			Direction: directionRead,
+		}, n)
+	})
+
+	if !streaming {
+		return
+	}
+
+	done := telemetry.StreamStarted(resp.Request.Context(), telemetry.StreamLabels{
+		Kind:         state.StreamKind(),
+		InboundProto: state.inboundProto,
+		BackendProto: resp.Proto,
+	})
+	resp.Body = observeClose(resp.Body, done)
+}
+
+func observeAuditedBackendResponse(ctx context.Context, response *http.Response) {
+	if state, ok := requestMetricsFromContext(ctx); ok {
+		state.SetBackend(response.Proto, false)
+		state.recordBackendRoundTrip(ctx, outcomeOK)
+	}
+	response.Body = observeTransportBytes(ctx, response.Body, transportLegBackend, false, directionRead)
 }
 
 func (h *Handler) buildUpstreamRequest(
@@ -366,6 +473,242 @@ func shouldAudit(info *requestinfo.RequestInfo) bool {
 	default:
 		return false
 	}
+}
+
+type requestMetricState struct {
+	mu              sync.Mutex
+	start           time.Time
+	verb            string
+	resourceGroup   string
+	resource        string
+	subresource     string
+	audited         bool
+	streaming       bool
+	inboundProto    string
+	backendProto    string
+	backendObserved bool
+}
+
+func newRequestMetricState(r *http.Request) *requestMetricState {
+	state := &requestMetricState{
+		start:        time.Now(),
+		verb:         strings.ToLower(r.Method),
+		streaming:    isWatchRequest(r),
+		inboundProto: r.Proto,
+		backendProto: labelUnknown,
+	}
+	if state.streaming {
+		state.verb = watchVerb
+	}
+	return state
+}
+
+func (s *requestMetricState) SetRequestInfo(info *requestinfo.RequestInfo, audited bool) {
+	if info == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.verb = info.Verb
+	s.resourceGroup = info.APIGroup
+	s.resource = info.Resource
+	s.subresource = info.Subresource
+	s.audited = audited
+	if info.Verb == watchVerb {
+		s.streaming = true
+	}
+}
+
+func (s *requestMetricState) SetBackend(proto string, streaming bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.backendProto = proto
+	if streaming {
+		s.streaming = true
+	}
+}
+
+func (s *requestMetricState) Streaming() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.streaming
+}
+
+func (s *requestMetricState) StreamKind() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.verb == watchVerb || s.streaming {
+		return watchVerb
+	}
+	return "response"
+}
+
+func (s *requestMetricState) RequestLabels(statusCode int) telemetry.RequestLabels {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return telemetry.RequestLabels{
+		Verb:          s.verb,
+		ResourceGroup: s.resourceGroup,
+		Resource:      s.resource,
+		Subresource:   s.subresource,
+		Audited:       s.audited,
+		Streaming:     s.streaming,
+		StatusClass:   telemetry.StatusClass(statusCode),
+		Outcome:       requestOutcome(statusCode),
+		InboundProto:  s.inboundProto,
+		BackendProto:  s.backendProto,
+	}
+}
+
+func (s *requestMetricState) recordBackendRoundTrip(ctx context.Context, outcome string) {
+	s.mu.Lock()
+	if s.backendObserved {
+		s.mu.Unlock()
+		return
+	}
+	s.backendObserved = true
+	labels := telemetry.BackendLabels{
+		Verb:         s.verb,
+		Streaming:    s.streaming,
+		Outcome:      outcome,
+		BackendProto: s.backendProto,
+	}
+	duration := time.Since(s.start)
+	s.mu.Unlock()
+
+	telemetry.RecordBackendRoundTrip(ctx, labels, duration)
+}
+
+type metricResponseWriter struct {
+	http.ResponseWriter
+
+	ctx        context.Context
+	state      *requestMetricState
+	statusCode int
+}
+
+func newMetricResponseWriter(
+	ctx context.Context,
+	w http.ResponseWriter,
+	state *requestMetricState,
+) *metricResponseWriter {
+	return &metricResponseWriter{
+		ResponseWriter: w,
+		ctx:            ctx,
+		state:          state,
+	}
+}
+
+func (w *metricResponseWriter) WriteHeader(statusCode int) {
+	if w.statusCode == 0 {
+		w.statusCode = statusCode
+	}
+	w.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (w *metricResponseWriter) Write(p []byte) (int, error) {
+	if w.statusCode == 0 {
+		w.statusCode = http.StatusOK
+	}
+	n, err := w.ResponseWriter.Write(p)
+	telemetry.AddTransportBytes(w.ctx, telemetry.TransportByteLabels{
+		Leg:       transportLegClient,
+		Streaming: w.state.Streaming(),
+		Direction: directionWrite,
+	}, int64(n))
+	return n, err
+}
+
+func (w *metricResponseWriter) Flush() {
+	flusher, ok := w.ResponseWriter.(http.Flusher)
+	if ok {
+		flusher.Flush()
+	}
+}
+
+func (w *metricResponseWriter) StatusCode() int {
+	return w.statusCode
+}
+
+type observedReadCloser struct {
+	io.ReadCloser
+
+	observe func(int64)
+	onClose func(string)
+}
+
+func observeReadCloser(body io.ReadCloser, observe func(int64)) io.ReadCloser {
+	if body == nil {
+		return nil
+	}
+	return &observedReadCloser{ReadCloser: body, observe: observe}
+}
+
+func observeClose(body io.ReadCloser, onClose func(string)) io.ReadCloser {
+	if body == nil {
+		return nil
+	}
+	return &observedReadCloser{ReadCloser: body, onClose: onClose}
+}
+
+func observeTransportBytes(
+	ctx context.Context,
+	body io.ReadCloser,
+	leg string,
+	streaming bool,
+	direction string,
+) io.ReadCloser {
+	return observeReadCloser(body, func(n int64) {
+		telemetry.AddTransportBytes(ctx, telemetry.TransportByteLabels{
+			Leg:       leg,
+			Streaming: streaming,
+			Direction: direction,
+		}, n)
+	})
+}
+
+func (r *observedReadCloser) Read(p []byte) (int, error) {
+	n, err := r.ReadCloser.Read(p)
+	if n > 0 && r.observe != nil {
+		r.observe(int64(n))
+	}
+	if err == io.EOF && r.onClose != nil {
+		r.onClose(outcomeBackendClose)
+		r.onClose = nil
+	}
+	return n, err
+}
+
+func (r *observedReadCloser) Close() error {
+	if r.onClose != nil {
+		r.onClose(outcomeClientCancel)
+		r.onClose = nil
+	}
+	return r.ReadCloser.Close()
+}
+
+func requestOutcome(statusCode int) string {
+	if statusCode == 0 {
+		return labelUnknown
+	}
+	if statusCode >= statusServerErrorMin {
+		return outcomeError
+	}
+	return outcomeOK
+}
+
+func isWatchRequest(r *http.Request) bool {
+	return r != nil && strings.EqualFold(r.URL.Query().Get("watch"), "true")
+}
+
+func isStreamingResponse(resp *http.Response) bool {
+	if resp == nil {
+		return false
+	}
+	return resp.ContentLength == -1
 }
 
 func copyHeaders(dst, src http.Header) {

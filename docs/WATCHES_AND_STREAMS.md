@@ -29,10 +29,13 @@ reflector.go:664  "Warning: watch ended with error"
 
 Two distinct signals, but the same root cause:
 
-1. `bookmark expired` — the Kubernetes informer asked for periodic
-   `Bookmark` events. The apiserver promises one roughly every 10s, but the
-   reflector has not seen one for ~20s. Something between the apiserver and
-   the reflector is **buffering** or **dropping** the stream.
+1. `bookmark expired` — the Kubernetes informer opened a watch-list stream
+   and is waiting for the required initial-events `Bookmark`. Separately,
+   apiserver storage can send periodic bookmarks when asked, but the generic
+   Kubernetes API contract says clients must not rely on a fixed bookmark
+   cadence. Either way, if a backend under our control writes watch bytes and
+   the reflector sees none before its deadline, something between the backend
+   and the reflector is **buffering** or **dropping** the stream.
 2. `stream error … INTERNAL_ERROR; received from peer` — this is the wire
    form of an HTTP/2 `RST_STREAM` frame with code `INTERNAL_ERROR (0x02)`.
    It is sent by a peer that wants to abort a stream that it can no longer
@@ -53,16 +56,16 @@ is a long-lived HTTP response with:
 | Method | `GET` |
 | URL | `…/apis/<group>/<version>/<resource>?watch=true&allowWatchBookmarks=true&resourceVersion=…&timeoutSeconds=…` |
 | Transport | HTTP/2 over TLS in modern clusters; HTTP/1.1 chunked as a fallback |
-| `Content-Type` | `application/json` (or `application/vnd.kubernetes.protobuf`) |
+| `Content-Type` | `application/json`, often negotiated as `application/json;stream=watch` (or the protobuf equivalents) |
 | `Content-Length` | absent — chunked / indeterminate length (`-1` to Go's transport) |
 | Body | a sequence of newline-framed `WatchEvent` JSON objects, written as the apiserver receives them |
 
-The body has **no fixed end**. The server writes events as resources change,
-and writes `Bookmark` events at the cadence advertised by `timeoutSeconds`
-(client-supplied; client-go uses a random value in `[minWatchTimeout, 2·min)`,
-default min 5m). Bookmarks exist precisely so that long-idle watches keep
-flowing bytes through every intermediary — if intermediate buffers eat them,
-the reflector gives up.
+The body has **no fixed end**. The server writes events as resources change.
+When `allowWatchBookmarks=true`, the server may also write `Bookmark` events;
+when `sendInitialEvents=true`, Kubernetes uses a synthetic bookmark to mark
+the end of the initial replay. Those bookmarks are not a strict heartbeat
+contract, but they are an excellent diagnostic: if the backend wrote one and
+the client never observed it, the stream was not proxied faithfully.
 
 The `sample-apiserver` we vendor in [external-resources/sample-apiserver/](../external-resources/sample-apiserver/)
 gets all of this for free from the `k8s.io/apiserver` framework — it does not
@@ -298,25 +301,263 @@ were never the requests that benefited from `WriteTimeout` anyway —
 was "client keeps a slow consumer open forever after the body is sent",
 which `IdleTimeout` already covers.
 
-## 7. Open Questions / Things To Verify In e2e
+## 7. Red Tests First
 
-Before we ship the fix we should add e2e coverage. Two things to prove:
+The tests should prove the failure mode before we touch the fix. There are two
+kinds of coverage we want:
 
-1. **Long watch stays open through the proxy**: open a `watch` against
-   `flunders.wardle.example.com` (the sample-apiserver) via the proxy, hold
-   it for 90s, write a resource mid-watch, and assert the client receives:
-   - an `ADDED` or `MODIFIED` event for the write, and
-   - at least one `BOOKMARK` event between connect and the write.
-   This guards against a regression to the current 30s kill.
+- **Fast red tests**: fail in unit/in-process suites and point directly at the
+  bad proxy defaults.
+- **Behavioral red tests**: reproduce the production symptom with an actual
+  long-lived watch through the proxy.
 
-2. **HTTP/2 inbound and outbound**: log the protocol on both sides for one
-   request and assert `HTTP/2.0`. This guards against an accidental
-   `TLSNextProto` change or a transport clone that drops HTTP/2.
+### 7a. Fast red tests
 
-The smoke and audit-gap suites already cover the mutating side; the watch
-e2e is new ground.
+1. `cmd/server`: `TestServerTimeoutDefaults_AreStreamingSafe`
 
-## 8. References
+   Add a test that asserts the listener used for APIService traffic has:
+
+   - `WriteTimeout == 0`
+   - `ReadTimeout == 0`
+   - `ReadHeaderTimeout == 15s`
+   - `IdleTimeout == 60s`
+
+   This fails today because `defaultWriteTimeout` is `30s` and the server uses
+   `ReadTimeout` instead of `ReadHeaderTimeout`. It is intentionally boring:
+   it turns the core design contract into a small, unmistakable regression
+   guard.
+
+   If we do not want the test to reach into constants forever, first extract a
+   tiny `newHTTPServer(addr string, handler http.Handler, tls *tls.Config)`
+   helper that preserves current behavior, then write the test against the
+   returned `*http.Server`. The first commit still goes red because the helper
+   will expose the current finite write timeout.
+
+2. `pkg/proxy`: `TestNewHandler_PassthroughFlushesImmediately`
+
+   Assert `handler.passthrough.FlushInterval == -1`.
+
+   This fails today because the field is left at `0`. It is not the root cause
+   for Kubernetes watches — stdlib `ReverseProxy` already flushes when
+   `ContentLength == -1` — but the explicit setting documents intent and
+   protects us if a future response shape no longer trips the heuristic.
+
+3. `pkg/proxy`: `TestHandler_WatchRequest_UsesPassthroughWithoutAudit`
+
+   Build a fake backend that records the incoming request and then streams two
+   newline-delimited watch events through an `http.Flusher`. Serve the proxy
+   through a real `httptest.Server`; do not use `httptest.ResponseRecorder`,
+   because it does not model streaming pressure.
+
+   Assertions:
+
+   - backend sees `watch=true`, `allowWatchBookmarks=true`, and the original
+     query string;
+   - the client can decode the first event before the backend writes the
+     second event;
+   - no webhook delivery occurs;
+   - `X-Forwarded-For` and backend identity headers are still applied.
+
+   This test will probably pass today. That is useful: it proves the handler
+   split is already correct and narrows the bug to server-level plumbing.
+
+4. `pkg/proxy`: `TestHandler_AuditedPath_DoesNotClaimWatch`
+
+   Table-test `shouldAudit` for `get`, `list`, `watch`, `proxy`, `connect`,
+   `create`, `update`, `patch`, and `delete`. The red value to guard against
+   is any future expansion that accidentally routes `watch` into
+   `serveAudited`, where `spoolBody(response.Body, ...)` would wait for EOF
+   and turn the watch into a black hole.
+
+### 7b. Behavioral red test
+
+Add a new e2e test, `TestWatchStaysOpenThroughProxy`, in
+`test/e2e/watch_stream_test.go`, and run it via `task e2e:test-watch-streams`.
+The existing impersonation test creates the object after a few seconds; it
+proves basic passthrough streaming and identity rewriting, but it does not stay
+open long enough to hit the current 30s write deadline.
+
+The test should:
+
+1. Run after `e2e:prepare` so the Wardle sample-apiserver, APIService, proxy,
+   and webhook receiver are installed.
+2. Open a watch through the Kubernetes API, not directly to the backend:
+   `GET /apis/wardle.example.com/v1alpha1/namespaces/default/flunders?watch=true&allowWatchBookmarks=true&timeoutSeconds=90`.
+3. Decode the response incrementally with `watch.NewStreamWatcher` or a JSON
+   decoder over `rest.RESTClient().Verb("GET").AbsPath(...).Param(...).Stream(ctx)`.
+4. Keep the watch open past `30s`. At about `45s`, create or patch a Flunder
+   through the same aggregated API.
+5. Assert the existing watch receives the `ADDED` or `MODIFIED` event after
+   the 45s write without reconnecting.
+6. Assert the stream closes only because the test context cancels it or because
+   `timeoutSeconds=90` expires, not because the proxy returned an early EOF,
+   HTTP/2 `INTERNAL_ERROR`, or decode error.
+
+This should fail against the current binary around the 30s mark. After the
+fix, it becomes the most important regression test because it exercises the
+same path used by client-go reflectors.
+
+Optional stronger version: use `sendInitialEvents=true`,
+`resourceVersionMatch=NotOlderThan`, and `allowWatchBookmarks=true`, then
+assert the initial-events bookmark arrives. That variant maps more directly to
+the observed reflector log line, but it depends on the cluster/backend feature
+set. The 45s mutation test is less Kubernetes-version-sensitive and still
+proves the proxy no longer kills long streams.
+
+### 7c. HTTP/2 verification tests
+
+Unit-level protocol assertions are awkward because `httptest.Server` hides
+some of the APIService path, so prefer e2e plus metrics:
+
+- Add a streaming request metric labelled with `inbound_proto` and
+  `backend_proto`, with bounded values such as `http1`, `http2`, and
+  `unknown`.
+- In e2e, run one watch and query Prometheus for samples where
+  `inbound_proto="http2"` and `backend_proto="http2"`.
+
+This avoids adding debug headers to production responses and gives operators
+the same signal we use in tests.
+
+## 8. Metrics Plan
+
+Use the GitOps Reverser pattern as the template:
+
+- create an internal `pkg/telemetry` package;
+- register package-level OpenTelemetry instruments in one place;
+- expose an `InitPrometheusExporter` for the real binary;
+- expose `InitTestExporter` plus small collection helpers for unit tests,
+  mirroring `external-resources/gitops-reverser/internal/telemetry`;
+- serve `/metrics` from the proxy process, then add Helm ServiceMonitor
+  templates. The first implementation exposes it on the existing HTTPS API
+  listener; a dedicated listener can be added later if we want stricter
+  separation.
+
+The proxy is not a controller-runtime manager, so we can either:
+
+- use the OpenTelemetry Prometheus exporter directly with the default
+  Prometheus registry, or
+- add controller-runtime only for its metrics server/registry.
+
+Prefer the direct exporter unless another controller-runtime dependency appears
+for a stronger reason. The important part to copy from GitOps Reverser is not
+controller-runtime itself; it is the testable instrument registration pattern.
+
+### 8a. Proposed instruments
+
+Keep labels bounded. Do not label by full path, namespace, name, user, or
+audit ID.
+
+| Metric | Type | Labels | Why |
+|---|---|---|---|
+| `apiservice_audit_proxy_requests_total` | Counter | `verb`, `resource_group`, `resource`, `subresource`, `audited`, `streaming`, `status_class`, `outcome`, `inbound_proto`, `backend_proto` | Request volume and success/failure split without high-cardinality paths. |
+| `apiservice_audit_proxy_request_duration_seconds` | Histogram | same bounded request labels minus protocol if too noisy | End-to-end request latency; for watches this is stream lifetime. |
+| `apiservice_audit_proxy_backend_roundtrip_seconds` | Histogram | `verb`, `streaming`, `outcome`, `backend_proto` | Time from proxy receiving the request to backend response headers. |
+| `apiservice_audit_proxy_streams_active` | UpDownCounter | `kind`, `inbound_proto`, `backend_proto` | Current open watch/stream count. This is the operator-facing "how many open streams do we have?" metric. |
+| `apiservice_audit_proxy_stream_duration_seconds` | Histogram | `kind`, `outcome`, `inbound_proto`, `backend_proto` | How long streams live and whether they end normally, by client cancel, by backend close, or by proxy error. |
+| `apiservice_audit_proxy_transport_bytes_total` | Counter | `leg`, `streaming`, `direction` | Transported bytes without decoding bodies. `leg` is `client` or `backend`; `direction` is `read` or `write`. |
+| `apiservice_audit_proxy_connections_active` | UpDownCounter | `state`, `proto` | Current inbound TCP connection counts from `http.Server.ConnState`. Useful but remember HTTP/2 multiplexes many watches on one socket. |
+| `apiservice_audit_proxy_audit_events_total` | Counter | `outcome` | Synthetic audit delivery health: `built`, `sent`, `build_error`, `send_error`. |
+| `apiservice_audit_proxy_audit_delivery_duration_seconds` | Histogram | `outcome` | Webhook delivery latency. |
+
+Latency buckets should cover both RPCs and long streams:
+
+- request/backend histograms: `0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120`
+- stream duration histogram: `1, 5, 10, 30, 60, 120, 300, 600, 1800, 3600`
+
+### 8b. Instrumentation points
+
+1. Wrap `Handler.ServeHTTP` with request timing and label extraction from
+   `requestinfo.RequestInfo`. For failed request-info parsing, use
+   `resource_group="unknown"` and `resource="unknown"`.
+2. In the passthrough `ReverseProxy`:
+   - record backend header latency in `ModifyResponse`;
+   - capture `resp.Proto` as the backend protocol;
+   - classify streaming responses by `resp.ContentLength == -1`, watch query
+     params, or both;
+   - increment/decrement `streams_active` around the response body copy.
+3. For byte counts, wrap:
+   - inbound request bodies before audited spooling;
+   - outbound request bodies before `RoundTrip`;
+   - backend response bodies;
+   - the `ResponseWriter` used to write back to the client.
+4. For open sockets, set `http.Server.ConnState` and maintain deltas for
+   `new`, `active`, `idle`, `hijacked`, and `closed`. Treat this as connection
+   telemetry, not stream telemetry.
+5. For audits, record around `Build` and `webhook.Send`.
+
+### 8c. Metrics tests
+
+Mirror GitOps Reverser's `InitTestExporter` tests:
+
+1. `pkg/telemetry`: initialization test proves every instrument is non-nil and
+   can be used.
+2. `pkg/telemetry`: collection helper test proves counters, gauges/up-down
+   counters, and histograms can be asserted by attributes.
+3. `pkg/proxy`: request metrics test sends a normal GET, a mutating POST, and
+   a backend failure, then asserts `requests_total` and duration histogram
+   counts by bounded labels.
+4. `pkg/proxy`: streaming metrics test opens a fake watch, waits until
+   `streams_active == 1`, sends two events, cancels the client, then asserts
+   active streams returns to `0`, bytes increased on both legs, and one stream
+   duration sample exists.
+5. `cmd/server`: connection metrics test drives `ConnState` transitions with a
+   tiny TLS server and asserts active/idle connection samples move as expected.
+6. Helm tests: `task helm:template` should render a metrics Service port and a
+   ServiceMonitor only when `monitoring.serviceMonitor.enabled=true`.
+
+## 9. Implementation Plan
+
+1. Add the red tests:
+   - `cmd/server` timeout defaults test;
+   - `pkg/proxy` explicit passthrough flush interval test;
+   - `pkg/proxy` watch passthrough/no-audit streaming guard;
+   - e2e `TestWatchStaysOpenThroughProxy`.
+2. Run the smallest relevant suite and confirm the intended failures:
+   - `task test` should fail on the timeout and flush tests;
+   - `task e2e:test-smoke` or a new focused e2e task should fail around 30s
+     once the watch test is wired in.
+3. Apply the streaming fix:
+   - set the API server listener `WriteTimeout` to `0`;
+   - replace `ReadTimeout` with `ReadHeaderTimeout`;
+   - set `ReverseProxy.FlushInterval = -1`;
+   - explicitly configure HTTP/2 serving with `http2.ConfigureServer`.
+4. Re-run the red tests and confirm they turn green.
+5. Add telemetry:
+   - `pkg/telemetry` exporter and test reader helpers;
+   - request, stream, byte, connection, and audit instruments;
+   - `/metrics` serving;
+   - Helm values, Service port, ServiceMonitor, and e2e Prometheus scrape
+     resources.
+6. Add metrics assertions:
+   - unit tests with the manual reader;
+   - e2e query against Prometheus after the watch test to confirm open stream,
+     byte, latency, and protocol samples.
+7. Run the required verification:
+   - `task fmt`
+   - `task test`
+   - `task helm:lint`
+   - `task helm:template`
+   - streaming/audit-related e2e lanes:
+     `task e2e:test-watch-streams`, `task e2e:test-smoke`,
+     `task e2e:test-audit-gap`,
+     `task e2e:test-impersonation`, and
+     `task e2e:test-impersonation-no-rbac`.
+
+## 10. Open Questions
+
+1. Should metrics eventually move from the existing TLS API listener to a
+   dedicated plain HTTP metrics listener? GitOps Reverser uses a dedicated
+   metrics service; that is operationally cleaner and avoids mixing Prometheus
+   scrapes with APIService traffic.
+2. Do we want a production config flag for server timeouts, or should the
+   streaming-safe values be hard-coded? For an APIService proxy, hard-coded
+   streaming-safe defaults are simpler and less footgun-prone.
+3. Should e2e assert bookmarks specifically, or only prove that a watch remains
+   usable beyond 30s? Start with the version-insensitive long-watch mutation
+   test; add the bookmark-specific test once the sample backend behavior is
+   stable in the e2e cluster.
+
+## 11. References
 
 - Symptom log lines: see the top of this document.
 - Go behavior cited from stdlib `net/http/httputil/reverseproxy.go`
@@ -324,6 +565,11 @@ e2e is new ground.
   (`WriteTimeout`, `ListenAndServeTLS` ALPN).
 - Kubernetes serving side: `k8s.io/apiserver/pkg/server/secure_serving.go`
   (lines ~184–205 configure HTTP/2 explicitly).
+- Metrics pattern:
+  - [external-resources/gitops-reverser/internal/telemetry/exporter.go](../external-resources/gitops-reverser/internal/telemetry/exporter.go)
+  - [external-resources/gitops-reverser/internal/telemetry/metricread.go](../external-resources/gitops-reverser/internal/telemetry/metricread.go)
+  - [external-resources/gitops-reverser/internal/webhook/audit_metrics_test.go](../external-resources/gitops-reverser/internal/webhook/audit_metrics_test.go)
+  - [external-resources/gitops-reverser/charts/gitops-reverser/templates/servicemonitor.yaml](../external-resources/gitops-reverser/charts/gitops-reverser/templates/servicemonitor.yaml)
 - Proxy code touched by this design:
   - [cmd/server/main.go:34-37](../cmd/server/main.go#L34-L37) (timeouts)
   - [cmd/server/main.go:170-176](../cmd/server/main.go#L170-L176) (server build)
