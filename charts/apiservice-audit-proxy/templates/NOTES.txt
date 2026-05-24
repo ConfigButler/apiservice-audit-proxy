@@ -31,8 +31,8 @@ The chart rendered the Wardle sample-apiserver Service:
   https://{{ include "apiservice-audit-proxy.testApiserver.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.backend.testApiserver.service.port | int }}
 
 For a complete demo install, use values-demo.yaml so backend.url,
-backend.identity.requestheader.clientCert.secretName, server.apiService.enabled,
-and audit.testWebhookReceiver.enabled are set explicitly together.
+backend.identity.mode, server.apiService.enabled, and
+audit.testWebhookReceiver.enabled are set explicitly together.
 {{- end }}
 {{- if .Values.audit.testWebhookReceiver.enabled }}
 

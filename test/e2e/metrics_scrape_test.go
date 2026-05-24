@@ -14,6 +14,7 @@ import (
 
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
+	"github.com/prometheus/common/model"
 )
 
 // TestProxyMetricsScrapeAfterWatch proves three PR #8 hardening behaviours
@@ -194,7 +195,8 @@ type promFamilies struct {
 
 func parsePromText(t *testing.T, text string) promFamilies {
 	t.Helper()
-	families, err := (&expfmt.TextParser{}).TextToMetricFamilies(strings.NewReader(text))
+	parser := expfmt.NewTextParser(model.UTF8Validation)
+	families, err := parser.TextToMetricFamilies(strings.NewReader(text))
 	if err != nil {
 		t.Fatalf("parse /metrics response: %v\n\n%s", err, text)
 	}
