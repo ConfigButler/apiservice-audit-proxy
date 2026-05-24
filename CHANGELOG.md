@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.0](https://github.com/ConfigButler/apiservice-audit-proxy/compare/apiservice-audit-proxy-v0.4.0...apiservice-audit-proxy-v0.5.0) (2026-05-24)
+
+
+### Features
+
+* first implement ([3c43e61](https://github.com/ConfigButler/apiservice-audit-proxy/commit/3c43e61c33a3e4f4e748fe9f40fb05b92e731edf))
+
+
+### Bug Fixes
+
+* failing e2e test do to lib init mistake ([e5b4937](https://github.com/ConfigButler/apiservice-audit-proxy/commit/e5b4937b3e3b0c385a460ce716ecc8c987306a93))
+
 ## [0.4.0](https://github.com/ConfigButler/apiservice-audit-proxy/compare/apiservice-audit-proxy-v0.3.0...apiservice-audit-proxy-v0.4.0) (2026-05-20)
 
 
