@@ -17,6 +17,7 @@ func TestInitTestExporterAndCollect(t *testing.T) {
 	RecordRequest(ctx, RequestLabels{
 		Verb:          "watch",
 		ResourceGroup: "wardle.example.com",
+		APIVersion:    "v1alpha1",
 		Resource:      "flunders",
 		Audited:       false,
 		Streaming:     true,
@@ -36,6 +37,7 @@ func TestInitTestExporterAndCollect(t *testing.T) {
 	requests, ok := CollectInt64Sum(reader, "apiservice_audit_proxy_requests_total", map[string]string{
 		"verb":           "watch",
 		"resource_group": "wardle.example.com",
+		"api_version":    "v1alpha1",
 		"resource":       "flunders",
 		"streaming":      "true",
 		"inbound_proto":  "http2",

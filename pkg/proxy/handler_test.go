@@ -333,6 +333,7 @@ func TestHandler_RecordsRequestMetrics(t *testing.T) {
 	requests, ok := telemetry.CollectInt64Sum(reader, "apiservice_audit_proxy_requests_total", map[string]string{
 		"verb":           "list",
 		"resource_group": "wardle.example.com",
+		"api_version":    "v1alpha1",
 		"resource":       "flunders",
 		"audited":        "false",
 		"streaming":      "false",

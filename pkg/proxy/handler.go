@@ -481,6 +481,7 @@ type requestMetricState struct {
 	start           time.Time
 	verb            string
 	resourceGroup   string
+	apiVersion      string
 	resource        string
 	subresource     string
 	audited         bool
@@ -513,6 +514,7 @@ func (s *requestMetricState) SetRequestInfo(info *requestinfo.RequestInfo, audit
 
 	s.verb = info.Verb
 	s.resourceGroup = info.APIGroup
+	s.apiVersion = info.APIVersion
 	s.resource = info.Resource
 	s.subresource = info.Subresource
 	s.audited = audited
@@ -553,6 +555,7 @@ func (s *requestMetricState) RequestLabels(statusCode int) telemetry.RequestLabe
 	return telemetry.RequestLabels{
 		Verb:          s.verb,
 		ResourceGroup: s.resourceGroup,
+		APIVersion:    s.apiVersion,
 		Resource:      s.resource,
 		Subresource:   s.subresource,
 		Audited:       s.audited,

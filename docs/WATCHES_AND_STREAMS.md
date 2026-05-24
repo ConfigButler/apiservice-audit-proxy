@@ -217,8 +217,8 @@ audit ID, or raw error string.
 
 | Metric | Type | Labels | Purpose |
 |---|---|---|---|
-| `apiservice_audit_proxy_requests_total` | Counter | `verb`, `resource_group`, `resource`, `subresource`, `audited`, `streaming`, `status_class`, `outcome`, `inbound_proto`, `backend_proto` | Request volume and success/failure split. |
-| `apiservice_audit_proxy_request_duration_seconds` | Histogram | request labels | End-to-end request latency. For watches, this behaves like stream lifetime at request level. |
+| `apiservice_audit_proxy_requests_total` | Counter | `verb`, `resource_group`, `api_version`, `resource`, `subresource`, `audited`, `streaming`, `status_class`, `outcome`, `inbound_proto`, `backend_proto` | Request volume and success/failure split. |
+| `apiservice_audit_proxy_request_duration_seconds` | Histogram | `verb`, `resource_group`, `api_version`, `resource`, `subresource`, `audited`, `streaming`, `status_class`, `outcome`, `inbound_proto`, `backend_proto` | End-to-end request latency. For watches, this behaves like stream lifetime at request level. |
 | `apiservice_audit_proxy_backend_roundtrip_seconds` | Histogram | `verb`, `streaming`, `outcome`, `backend_proto` | Time until backend response headers arrive. |
 | `apiservice_audit_proxy_streams_active` | UpDownCounter | `kind`, `inbound_proto`, `backend_proto` | Current open watch/stream count. |
 | `apiservice_audit_proxy_stream_duration_seconds` | Histogram | `kind`, `outcome`, `inbound_proto`, `backend_proto` | Stream lifetime and terminal outcome. |
@@ -237,6 +237,21 @@ Notable label decisions from the review:
 - stream duration outcomes distinguish `backend_close`, `client_cancel`, and
   `read_error`. Non-EOF backend read errors are recorded as `read_error`, not
   silently folded into `client_cancel`.
+
+Operators can answer "what resources pass through this proxy, and how often?"
+with a single query against `apiservice_audit_proxy_requests_total`:
+
+```promql
+topk(20, sum by (resource_group, api_version, resource, verb) (
+  rate(apiservice_audit_proxy_requests_total[5m])
+))
+```
+
+This mirrors gitops-reverser's use of group/version/resource/verb labels on
+its webhook metrics. Cardinality stays bounded: no namespace, object name,
+user, request path, audit ID, or raw error string is ever labelled. Empty
+group/version/resource values normalize to `unknown` rather than expanding the
+label space.
 
 ## 7. Metrics Tests
 

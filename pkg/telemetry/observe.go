@@ -19,6 +19,7 @@ const (
 type RequestLabels struct {
 	Verb          string
 	ResourceGroup string
+	APIVersion    string
 	Resource      string
 	Subresource   string
 	Audited       bool
@@ -117,6 +118,7 @@ func requestAttrs(labels RequestLabels) metric.MeasurementOption {
 	return metric.WithAttributes(
 		attribute.String("verb", emptyToUnknown(labels.Verb)),
 		attribute.String("resource_group", emptyToUnknown(labels.ResourceGroup)),
+		attribute.String("api_version", emptyToUnknown(labels.APIVersion)),
 		attribute.String("resource", emptyToUnknown(labels.Resource)),
 		attribute.String("subresource", emptyToNone(labels.Subresource)),
 		attribute.String("audited", strconv.FormatBool(labels.Audited)),
