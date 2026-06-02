@@ -51,7 +51,6 @@ package e2e
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"testing"
 	"time"
 
@@ -79,8 +78,9 @@ metadata:
   name: %s
 `, ns))
 	t.Cleanup(func() {
-		_ = exec.Command("kubectl", "--context", kubectlContext,
-			"delete", "namespace", ns, "--ignore-not-found", "--wait=false").Run()
+		// Best-effort teardown — ignore the error rather than failing the test,
+		// so do not route through client.run (which calls t.Fatalf on failure).
+		_ = client.command(ctx, "delete", "namespace", ns, "--ignore-not-found", "--wait=false").Run()
 	})
 
 	// Seed two flunders so the collection delete has real members to remove.
