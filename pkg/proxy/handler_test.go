@@ -109,6 +109,87 @@ func TestHandler_MutatingRequest_ProxiesAndEmitsEvent(t *testing.T) {
 	}
 }
 
+func TestHandler_DeleteCollectionRequest_ProxiesAndEmitsEvent(t *testing.T) {
+	t.Parallel()
+
+	// A collection delete (DELETE on the resource path with no name) is rewritten
+	// by RequestInfo to the distinct verb "deletecollection". The backend answers
+	// with a metav1.Status, which is the only body that exists for this op — the
+	// proxy must still emit an audit event so downstream consumers see the
+	// collection delete of an aggregated resource (e.g. namespace teardown).
+	responseBody := `{"kind":"Status","apiVersion":"v1","metadata":{},"status":"Success","details":{"group":"wardle.example.com","kind":"flunders"}}`
+
+	backendRequests := make(chan *http.Request, 1)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backendRequests <- r.Clone(context.Background())
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(responseBody))
+	}))
+	defer backend.Close()
+
+	webhookClient := &fakeWebhookClient{delivered: make(chan auditv1.EventList, 1)}
+	backendURL, err := url.Parse(backend.URL)
+	require.NoError(t, err)
+
+	handler, err := NewHandler(HandlerConfig{
+		BackendURL:        backendURL,
+		WebhookClient:     webhookClient,
+		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		MaxAuditBodyBytes: 4096,
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(
+		http.MethodDelete,
+		"http://proxy.local/apis/wardle.example.com/v1alpha1/namespaces/default/flunders",
+		nil,
+	)
+	req.Header.Set("Audit-Id", "audit-456")
+	req.Header.Set("X-Remote-User", "alice")
+	req.Header.Set("X-Remote-Group", "devs")
+	req.RemoteAddr = "10.0.0.5:12345"
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	resp := recorder.Result()
+	defer func() {
+		require.NoError(t, resp.Body.Close())
+	}()
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.JSONEq(t, responseBody, string(body))
+
+	select {
+	case backendRequest := <-backendRequests:
+		assert.Equal(t, http.MethodDelete, backendRequest.Method)
+		assert.Equal(t, "/apis/wardle.example.com/v1alpha1/namespaces/default/flunders", backendRequest.URL.Path)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for backend request")
+	}
+
+	select {
+	case delivered := <-webhookClient.delivered:
+		require.Len(t, delivered.Items, 1)
+		event := delivered.Items[0]
+		assert.Equal(t, "deletecollection", event.Verb)
+		assert.Equal(t, "alice", event.User.Username)
+		require.NotNil(t, event.ObjectRef)
+		// A collection op has no single object — there must be no Name, but the
+		// resource coordinates must still be present so consumers can act on it.
+		assert.Empty(t, event.ObjectRef.Name)
+		assert.Equal(t, "flunders", event.ObjectRef.Resource)
+		assert.Equal(t, "wardle.example.com", event.ObjectRef.APIGroup)
+		assert.Equal(t, "default", event.ObjectRef.Namespace)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for webhook delivery")
+	}
+}
+
 func TestHandler_GetRequest_PassesThroughWithoutAuditDelivery(t *testing.T) {
 	t.Parallel()
 
@@ -285,6 +366,7 @@ func TestShouldAudit_ExcludesReadAndLongRunningVerbs(t *testing.T) {
 		{verb: "update", want: true},
 		{verb: "patch", want: true},
 		{verb: "delete", want: true},
+		{verb: "deletecollection", want: true},
 	}
 
 	for _, tt := range tests {

@@ -17,6 +17,7 @@ all in the order CI uses.
 | Audited write | `TestSmoke` | Strong | <1s |
 | Audited write — explicit backend CA | `TestSmoke` (re-run via `e2e:test-smoke-backend-ca`) | Strong | <1s + redeploy |
 | Native vs proxy audit comparison | `TestAggregatedAPIAuditGap` | Strong | ~5s |
+| Collection delete is audited | `TestAggregatedAPIDeleteCollectionAudit` | Strong | ~1s |
 | Image lifecycle | `TestImageRefresh*` (3 tests) | Strong | ~15s |
 | Long watch survives | `TestWatchStaysOpenThroughProxy` | Strong (PR #8 regression guard) | ~45s |
 | Metrics scrape + stream classification | `TestProxyMetricsScrapeAfterWatch` | Strong | ~2s |
@@ -66,6 +67,24 @@ The "demo" test. Drives one aggregated-API write and asserts:
 **Strong because**: it pins the *motivation*, not just the mechanism. If
 kube-apiserver ever started returning rich aggregated-API events, this test
 would fail loudly and we would re-evaluate.
+
+### `TestAggregatedAPIDeleteCollectionAudit`
+Covers the `deletecollection` verb, which is distinct from `delete` in
+Kubernetes `RequestInfo` (a `DELETE` with no object name is rewritten to
+`deletecollection`) and was silently dropped before it was added to the
+`shouldAudit` allow-list. The test seeds two flunders and issues a single raw
+collection `DELETE` (`kubectl delete --raw`, which deterministically produces
+the verb — `kubectl delete --all` instead lists and deletes each member by
+name), then asserts the proxy (Lane B) emits a complete event with no
+`ObjectRef.Name` (a collection op has no single object), the correct resource
+coordinates, `ResponseStatus.Code` 200, and a captured response body.
+
+**Strong because**: it is a regression guard for the verb gap, verified to go
+red against a pre-fix binary. The body shape is caller-dependent — a raw delete
+returns the deleted-items list, whereas a namespace-teardown `deletecollection`
+returns an empty body — so the test keys its hard assertions off `ObjectRef`
+and status, matching what downstream consumers rely on. Both real wire forms
+are checked in under [examples/](examples/) as paired Lane A/Lane B payloads.
 
 ### `TestImageRefresh*` (3 tests)
 Validates that `task e2e:load-image` correctly invalidates pod image

@@ -187,6 +187,7 @@ tasks:
       - task: e2e:test-metrics-scrape
       - task: e2e:test-smoke-backend-ca
       - task: e2e:test-audit-gap
+      - task: e2e:test-delete-collection
       - task: e2e:test-requestheader-trust
       - task: e2e:test-impersonation
       - task: e2e:test-impersonation-no-rbac
@@ -238,6 +239,18 @@ tasks:
       - |
         CTX={{.CTX}} WEBHOOK_TESTER_BASE_URL={{.WEBHOOK_TESTER_BASE_URL}} \
           go test -tags=e2e -run 'TestAggregatedAPIAuditGap' -count=1 -v ./test/e2e
+
+  e2e:test-delete-collection:
+    desc: |
+      Assert the proxy emits a complete audit event for a collection delete
+      (the deletecollection verb) of an aggregated resource.
+      Requires: cluster created with audit webhook baked in + webhookTester.enabled=true.
+    deps:
+      - e2e:portforward-webhook-tester
+    cmds:
+      - |
+        CTX={{.CTX}} WEBHOOK_TESTER_BASE_URL={{.WEBHOOK_TESTER_BASE_URL}} \
+          go test -tags=e2e -run 'TestAggregatedAPIDeleteCollectionAudit' -count=1 -v ./test/e2e
 
   e2e:cluster-down:
     desc: Delete the standalone k3d cluster

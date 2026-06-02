@@ -37,7 +37,7 @@ The proxy:
 In scope:
 
 - aggregated API proxying through `APIService`
-- mutating verbs: `create`, `update`, `patch`, `delete`
+- mutating verbs: `create`, `update`, `patch`, `delete`, `deletecollection`
 - best-effort webhook delivery after the proxied response completes
 - delegated requestheader identity capture
 - backend identity modes: `requestheader` and `impersonation`

@@ -478,7 +478,7 @@ func shouldAudit(info *requestinfo.RequestInfo) bool {
 	}
 
 	switch info.Verb {
-	case "create", "update", "patch", "delete":
+	case "create", "update", "patch", "delete", "deletecollection":
 		return true
 	default:
 		return false

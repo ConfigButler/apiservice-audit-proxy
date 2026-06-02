@@ -86,6 +86,31 @@ resource.
   audit event includes the name, request body, and response body without help
   from this proxy.
 
+Collection deletes (the `deletecollection` verb) show the same gap. For each of
+the two real forms below, the Lane A and Lane B payloads are the **same
+operation** (matched by `auditID`) — the native kube-apiserver event is hollow,
+and only the proxy supplies a usable body. The body the proxy captures is
+caller-dependent. Both pairs were captured from `task e2e:test-delete-collection`:
+
+- **Raw collection delete** — a direct `DELETE` against the collection path
+  (e.g. `kubectl delete --raw`).
+  - [Lane A](docs/examples/audit-lane-a-kube-apiserver-deletecollection-raw.json)
+    has the verb, resource, user, and status, but no `objectRef.name`,
+    `requestObject`, or `responseObject`.
+  - [Lane B](docs/examples/audit-lane-b-proxy-deletecollection-raw.json) records
+    the same delete with a populated `responseObject` — the `FlunderList` of
+    deleted items the wardle backend returns. (`objectRef` still has no `name`,
+    since a collection op targets no single object.)
+- **Namespace teardown** — the `deletecollection` the namespace controller
+  issues per namespaced resource when a namespace is deleted.
+  - [Lane A](docs/examples/audit-lane-a-kube-apiserver-deletecollection-namespace-teardown.json)
+    is hollow in the same way.
+  - [Lane B](docs/examples/audit-lane-b-proxy-deletecollection-namespace-teardown.json)
+    adds the `requestObject` (the controller's `DeleteOptions`). The backend
+    returns an empty `200`, so there is no `responseObject` and
+    `responseStatus.code` carries the outcome — downstream consumers key off
+    `objectRef`, not the body, so a bodyless event is still actionable.
+
 ## Development
 
 This repo uses [`task`](https://taskfile.dev) for all common workflows:
